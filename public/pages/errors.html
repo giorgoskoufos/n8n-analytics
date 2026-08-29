@@ -66,7 +66,7 @@
             </div>
             <!-- Transient -->
             <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
-                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Transient <span class="text-[9px] text-gray-600">(auto-retry)</span></p>
+                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Self-healing <span class="text-[9px] text-gray-600">(measured)</span></p>
                 <h2 id="kpiTransient" class="text-3xl font-bold text-indigo-400">0</h2>
                 <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-rotate text-4xl"></i></div>
             </div>
@@ -74,6 +74,7 @@
             <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
                 <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Needs Attention</p>
                 <h2 id="kpiStructural" class="text-3xl font-bold text-n8n-primary">0</h2>
+                <p id="kpiMislabelled" class="hidden text-[9px] text-amber-400/90 mt-1 relative z-10"></p>
                 <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-triangle-exclamation text-4xl"></i></div>
             </div>
         </div>

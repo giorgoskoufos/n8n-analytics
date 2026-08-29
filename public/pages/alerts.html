@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alerts - n8n Dashboard</title>
+    <script src="../logic/guard.js"></script>
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+    <link rel="manifest" href="../assets/site.webmanifest">
+    <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-6xl mx-auto">
+        <div id="header-target" data-title="Alerts" data-subtitle="Decide what is worth being told about"></div>
+
+        <!-- Status strip -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Active rules</p>
+                <h3 id="statRules" class="text-3xl font-bold text-indigo-400">—</h3>
+            </div>
+            <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Channels</p>
+                <h3 id="statChannels" class="text-3xl font-bold text-gray-300">—</h3>
+            </div>
+            <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Fired (24h)</p>
+                <h3 id="statFired" class="text-3xl font-bold text-amber-400">—</h3>
+            </div>
+            <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Undelivered</p>
+                <h3 id="statUndelivered" class="text-3xl font-bold text-rose-400">—</h3>
+            </div>
+        </div>
+
+        <div id="alertPaused" class="hidden text-xs rounded-lg px-3 py-2 bg-amber-900/20 border border-amber-500/30 text-amber-200 mb-6"></div>
+        <div id="permissionNote" class="hidden text-xs rounded-lg px-3 py-2 bg-black/25 border border-gray-800 text-gray-400 mb-6"></div>
+
+        <!-- ============================== RULES ============================== -->
+        <section class="mb-10">
+            <div class="flex items-center justify-between mb-4 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-bell mr-2 text-indigo-400"></i>Rules
+                </h2>
+                <div class="flex items-center gap-2">
+                    <button data-action="runAlertsNow"
+                        class="px-3 py-2 text-[10px] font-bold uppercase tracking-widest bg-gray-800/60 border border-gray-700 rounded-lg text-gray-300 hover:border-gray-500 transition-colors">
+                        <i class="fa-solid fa-play mr-1"></i>Evaluate now
+                    </button>
+                    <button data-action="newAlertRule"
+                        class="px-3 py-2 text-[10px] font-bold uppercase tracking-widest bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white transition-colors">
+                        <i class="fa-solid fa-plus mr-1"></i>New rule
+                    </button>
+                </div>
+            </div>
+
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3 w-10"></th>
+                                <th class="p-3">Rule</th>
+                                <th class="p-3">Condition</th>
+                                <th class="p-3">Watching</th>
+                                <th class="p-3">Goes to</th>
+                                <th class="p-3 text-right">Last fired</th>
+                                <th class="p-3 text-right"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="rulesBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="7" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================ CHANNELS ============================= -->
+        <section class="mb-10">
+            <div class="flex items-center justify-between mb-4 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-paper-plane mr-2 text-green-400"></i>Channels
+                </h2>
+                <button data-action="newAlertChannel"
+                    class="px-3 py-2 text-[10px] font-bold uppercase tracking-widest bg-gray-800/60 border border-gray-700 rounded-lg text-gray-300 hover:border-gray-500 transition-colors">
+                    <i class="fa-solid fa-plus mr-1"></i>New channel
+                </button>
+            </div>
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3 w-10"></th>
+                                <th class="p-3">Channel</th>
+                                <th class="p-3">Type</th>
+                                <th class="p-3">Used by</th>
+                                <th class="p-3">Last result</th>
+                                <th class="p-3 text-right"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="channelsBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="6" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================== EVENTS ============================= -->
+        <section class="mb-10">
+            <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest mb-4">
+                <i class="fa-solid fa-clock-rotate-left mr-2 text-gray-400"></i>What has fired
+            </h2>
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">When</th>
+                                <th class="p-3">Rule</th>
+                                <th class="p-3">What happened</th>
+                                <th class="p-3 text-right">Delivery</th>
+                            </tr>
+                        </thead>
+                        <tbody id="eventsBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ============================== EDITOR ============================== -->
+    <div id="editorModal" class="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] hidden items-center justify-center p-4">
+        <div class="bg-n8n-card border border-gray-700 rounded-2xl w-full max-w-2xl flex flex-col shadow-2xl max-h-[90vh]">
+            <div class="p-5 border-b border-gray-800 flex justify-between items-center bg-black/20 shrink-0">
+                <h3 id="editorTitle" class="text-base font-bold text-white">New rule</h3>
+                <button data-action="closeAlertEditor" class="text-gray-500 hover:text-white transition-colors">
+                    <i class="fa-solid fa-xmark text-xl"></i>
+                </button>
+            </div>
+            <div id="editorBody" class="flex-1 overflow-auto p-5 flex flex-col gap-4"></div>
+            <div class="p-4 border-t border-gray-800 flex justify-between items-center bg-black/20 shrink-0">
+                <p id="editorError" class="text-xs text-rose-400"></p>
+                <div class="flex gap-2">
+                    <button data-action="closeAlertEditor"
+                        class="px-4 py-2 text-xs font-bold uppercase tracking-widest text-gray-400 hover:text-white transition-colors">Cancel</button>
+                    <button id="editorSave" data-action="saveAlertEditor"
+                        class="px-5 py-2 text-xs font-bold uppercase tracking-widest bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white transition-colors">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../logic/global_functions.js"></script>
+    <script src="../logic/alerts.js"></script>
+    <script src="../logic/header.js"></script>
+</body>
+</html>

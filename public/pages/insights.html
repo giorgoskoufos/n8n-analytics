@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Insights - n8n Dashboard</title>
+    <script src="../logic/guard.js"></script>
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
+    <script src="/vendor/chart.umd.min.js"></script>
+    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+    <link rel="manifest" href="../assets/site.webmanifest">
+    <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        <div id="header-target" data-title="Insights" data-subtitle="Trigger types, queue lag, reliability, growth"></div>
+
+        <!-- Time Range Controls -->
+        <div class="flex flex-col sm:flex-row justify-end items-center mb-8 gap-4 w-full">
+            <div id="presetRangeContainer" class="flex items-center gap-2">
+                <button id="btn24h" data-action="setInsightsRange" data-arg="24"
+                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">24h</button>
+                <button id="btn48h" data-action="setInsightsRange" data-arg="48"
+                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">48h</button>
+                <button id="btn7d" data-action="setInsightsRange" data-arg="168"
+                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">7d</button>
+                <button id="btn14d" data-action="setInsightsRange" data-arg="336"
+                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">14d</button>
+                <button id="btn30d" data-action="setInsightsRange" data-arg="720"
+                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">30d</button>
+            </div>
+            <div class="flex items-center gap-3 h-[42px] bg-n8n-card border border-gray-800 rounded-lg px-4 py-2 hover:border-gray-700 transition-colors">
+                <span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-0">Folder</span>
+                <select id="folderFilter"
+                    class="bg-transparent border-none text-sm text-n8n-text font-semibold focus:outline-none cursor-pointer">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-3 h-[42px] bg-n8n-card border border-gray-800 rounded-lg px-4 py-2 hover:border-gray-700 transition-colors">
+                <span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-0">Tag</span>
+                <select id="tagFilter"
+                    class="bg-transparent border-none text-sm text-n8n-text font-semibold focus:outline-none cursor-pointer">
+                    <option value="">All</option>
+                </select>
+            </div>
+            <div id="customRangeContainer"
+                class="flex items-center gap-3 h-[42px] bg-n8n-card border border-gray-800 rounded-lg px-4 py-2 w-full sm:w-auto hover:border-gray-700 transition-all duration-300">
+                <span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-0">Custom</span>
+                <div class="flex items-center gap-2">
+                    <input type="date" id="insightsRangeStart"
+                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
+                    <span class="text-gray-600">—</span>
+                    <input type="date" id="insightsRangeEnd"
+                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- F-02 · Trigger types                                         -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-bolt mr-2 text-indigo-400"></i>Trigger types
+                </h2>
+                <p class="text-[11px] text-gray-500">A webhook failure and a schedule failure are different problems.</p>
+            </div>
+            <p id="triggerCoverage" class="hidden text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div id="modeCards" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div class="col-span-full p-10 text-center text-gray-500 text-sm italic">Loading…</div>
+            </div>
+
+            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 h-80 flex flex-col">
+                <h3 class="text-sm font-semibold text-gray-400 mb-4">Volume by trigger type</h3>
+                <div class="flex-1 relative min-h-0">
+                    <canvas id="volumeByModeChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-03 · Queue lag                                             -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-hourglass-half mr-2 text-amber-400"></i>Queue lag
+                </h2>
+                <p class="text-[11px] text-gray-500">How long an execution waited between being created and starting.</p>
+            </div>
+            <p id="lagCoverage" class="hidden text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Median (p50)</p>
+                    <h3 id="lagP50" class="text-2xl font-bold text-green-400">—</h3>
+                    <p id="lagSamples" class="text-[10px] text-gray-600 mt-1">—</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">p95</p>
+                    <h3 id="lagP95" class="text-2xl font-bold text-amber-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">the alerting threshold</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">p99</p>
+                    <h3 id="lagP99" class="text-2xl font-bold text-red-400/90">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">worst one in a hundred</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Worst</p>
+                    <h3 id="lagMax" class="text-2xl font-bold text-gray-300">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">single longest wait</p>
+                </div>
+            </div>
+
+            <div id="backpressure" class="text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-500 mb-2">
+                Measuring…
+            </div>
+            <p id="lagSkew" class="hidden text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="grid grid-cols-1 lg:grid-cols-5 gap-6 mt-4">
+                <div class="lg:col-span-3 bg-n8n-card p-6 rounded-xl border border-gray-800 h-80 flex flex-col">
+                    <h3 class="text-sm font-semibold text-gray-400 mb-4">Lag percentiles over time</h3>
+                    <div class="flex-1 relative min-h-0">
+                        <canvas id="lagChart"></canvas>
+                    </div>
+                </div>
+                <div class="lg:col-span-2 bg-n8n-card rounded-xl border border-gray-800 overflow-hidden flex flex-col h-80">
+                    <div class="p-4 border-b border-gray-800 bg-black/20">
+                        <h3 class="text-sm font-semibold text-gray-400">By trigger type</h3>
+                    </div>
+                    <div class="overflow-auto flex-1 custom-scrollbar">
+                        <table class="w-full text-left">
+                            <thead class="bg-black/40 sticky top-0 z-10">
+                                <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                    <th class="p-3">Mode</th>
+                                    <th class="p-3 text-right">n</th>
+                                    <th class="p-3 text-right">p50</th>
+                                    <th class="p-3 text-right">p95</th>
+                                    <th class="p-3 text-right">p99</th>
+                                    <th class="p-3 text-right">max</th>
+                                </tr>
+                            </thead>
+                            <tbody id="lagModeBody" class="divide-y divide-gray-800/50">
+                                <tr><td colspan="6" class="p-8 text-center text-gray-500 text-sm italic">Loading…</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-06 · Real concurrency                                      -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-layer-group mr-2 text-violet-400"></i>Concurrency
+                </h2>
+                <p class="text-[11px] text-gray-500">How many ran <em>at the same time</em> — not how many started.</p>
+            </div>
+
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Peak</p>
+                    <h3 id="concPeak" class="text-3xl font-bold text-violet-400">—</h3>
+                    <p id="concPeakAt" class="text-[10px] text-gray-600 mt-1">—</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Average</p>
+                    <h3 id="concAvg" class="text-3xl font-bold text-gray-300">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">time-weighted occupancy</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Busy time</p>
+                    <h3 id="concBusy" class="text-3xl font-bold text-cyan-400">—</h3>
+                    <p id="concBusyDetail" class="text-[10px] text-gray-600 mt-1">—</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Headroom</p>
+                    <h3 id="concHeadroom" class="text-3xl font-bold text-gray-300">—</h3>
+                    <p id="concLimitNote" class="text-[10px] text-gray-600 mt-1">no limit configured</p>
+                </div>
+            </div>
+
+            <div id="concVerdict" class="text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-500 mb-2">
+                Measuring…
+            </div>
+            <p id="concUnresolved" class="hidden text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 h-80 flex flex-col mt-4">
+                <h3 class="text-sm font-semibold text-gray-400 mb-4">Simultaneous vs. started</h3>
+                <div class="flex-1 relative min-h-0">
+                    <canvas id="concurrencyInsightChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-09 · Silent death                                          -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-volume-xmark mr-2 text-rose-400"></i>Silent workflows
+                </h2>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-gray-500 uppercase tracking-widest">Late by more than</span>
+                    <select id="silenceK"
+                        class="bg-black/30 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer">
+                        <option value="2">2&times; its usual gap</option>
+                        <option value="3" selected>3&times; its usual gap</option>
+                        <option value="5">5&times; its usual gap</option>
+                        <option value="10">10&times; its usual gap</option>
+                    </select>
+                </div>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-4">
+                Active workflows that stopped running. They throw no error and appear nowhere else &mdash;
+                the absence of a failure is not the same as success.
+            </p>
+
+            <p id="silenceStale" class="hidden text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Silent</p>
+                    <h3 id="silentCount" class="text-3xl font-bold text-rose-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">overdue against their own rhythm</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Dormant</p>
+                    <h3 id="dormantCount" class="text-3xl font-bold text-amber-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">active, nothing for a month</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Never observed</p>
+                    <h3 id="neverCount" class="text-3xl font-bold text-gray-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">active, never seen to run</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">On schedule</p>
+                    <h3 id="runningCount" class="text-3xl font-bold text-green-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">running as expected</p>
+                </div>
+            </div>
+
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="p-4 border-b border-gray-800 bg-black/20 flex justify-between items-center">
+                    <h3 class="text-sm font-semibold text-gray-400">Not running</h3>
+                    <span id="silenceAsOf" class="text-[10px] text-gray-600 uppercase tracking-widest"></span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Workflow</th>
+                                <th class="p-3">State</th>
+                                <th class="p-3 text-right">Usual gap</th>
+                                <th class="p-3 text-right">Silent for</th>
+                                <th class="p-3 text-right">Overdue</th>
+                                <th class="p-3">Evidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="silenceBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="6" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-05 · Reliability                                           -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-shield-halved mr-2 text-green-400"></i>Reliability
+                </h2>
+                <p class="text-[11px] text-gray-500">What went wrong, and what went wrong and stayed wrong.</p>
+            </div>
+            <p id="reliabilityCoverage" class="hidden text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Raw error rate</p>
+                    <h3 id="relRawRate" class="text-3xl font-bold text-gray-300">—</h3>
+                    <p id="relRawCount" class="text-[10px] text-gray-600 mt-1">—</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Effective rate</p>
+                    <h3 id="relEffRate" class="text-3xl font-bold text-gray-300">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">after retries</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Retries</p>
+                    <h3 id="relRetries" class="text-3xl font-bold text-indigo-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">re-runs of a failure</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Self-healed</p>
+                    <h3 id="relHealed" class="text-3xl font-bold text-green-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">failed, then passed</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Waiting</p>
+                    <h3 id="relWaiting" class="text-3xl font-bold text-cyan-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">parked on a Wait node</p>
+                </div>
+            </div>
+
+            <p id="relNote" class="text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-2"></p>
+            <p id="relFinished" class="text-[11px] bg-black/25 border border-gray-800 rounded-lg px-3 py-2"></p>
+
+            <div id="stormsPanel" class="hidden bg-n8n-card rounded-xl border border-gray-800 overflow-hidden mt-4">
+                <div class="p-4 border-b border-gray-800 bg-black/20">
+                    <h3 class="text-sm font-semibold text-gray-400">Retry concentration</h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Workflow</th>
+                                <th class="p-3 text-right">Retries</th>
+                                <th class="p-3 text-right">Recovered</th>
+                                <th class="p-3 text-right">Last</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stormsBody" class="divide-y divide-gray-800/50"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-16 · Organisation                                          -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-folder-tree mr-2 text-yellow-400"></i>Organisation
+                </h2>
+                <p class="text-[11px] text-gray-500">What each folder and tag actually costs.</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden flex flex-col">
+                    <div class="p-4 border-b border-gray-800 bg-black/20">
+                        <h3 class="text-sm font-semibold text-gray-400">Folders</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-black/40">
+                                <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                    <th class="p-3">Folder</th>
+                                    <th class="p-3 text-right">Workflows</th>
+                                    <th class="p-3 text-right">Executions</th>
+                                    <th class="p-3 text-right">Error rate</th>
+                                </tr>
+                            </thead>
+                            <tbody id="folderBody" class="divide-y divide-gray-800/50">
+                                <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden flex flex-col">
+                    <div class="p-4 border-b border-gray-800 bg-black/20">
+                        <h3 class="text-sm font-semibold text-gray-400">Tags</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-black/40">
+                                <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                    <th class="p-3">Tag</th>
+                                    <th class="p-3 text-right">Workflows</th>
+                                    <th class="p-3 text-right">Executions</th>
+                                    <th class="p-3 text-right">Error rate</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tagBody" class="divide-y divide-gray-800/50">
+                                <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-10 · Blast radius                                          -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-diagram-project mr-2 text-orange-400"></i>Blast radius
+                </h2>
+                <p class="text-[11px] text-gray-500">One expired token is not one broken workflow.</p>
+            </div>
+
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden mb-6">
+                <div class="p-4 border-b border-gray-800 bg-black/20 flex justify-between items-center">
+                    <h3 class="text-sm font-semibold text-gray-400">Credentials, by how much depends on them</h3>
+                    <span class="text-[10px] text-gray-600 uppercase tracking-widest">names and types only &mdash; never the secret</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Credential</th>
+                                <th class="p-3">Type</th>
+                                <th class="p-3 text-right">Workflows</th>
+                                <th class="p-3 text-right">Executions</th>
+                                <th class="p-3 text-right">Error rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="credentialBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="5" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="callGraph" class="bg-n8n-card rounded-xl border border-gray-800 p-6 hidden">
+                <h3 class="text-sm font-semibold text-gray-400 mb-3">Workflows that depend on other workflows</h3>
+                <div id="callGraphBody" class="flex flex-col gap-2 text-[11px]"></div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-11 · Deploys                                               -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-code-branch mr-2 text-emerald-400"></i>Deploys
+                </h2>
+                <label class="flex items-center gap-2 text-[10px] text-gray-500 uppercase tracking-widest cursor-pointer">
+                    <input type="checkbox" id="includeAutosaves" class="accent-indigo-500">
+                    Include autosaves
+                </label>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-4">
+                Which version ran, who saved it, and how it compares with the one before &mdash; git blame for automations.
+            </p>
+            <p id="deployCoverage" class="hidden text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Saved</th>
+                                <th class="p-3">Workflow</th>
+                                <th class="p-3">By</th>
+                                <th class="p-3 text-right">Runs</th>
+                                <th class="p-3 text-right">Error rate</th>
+                                <th class="p-3 text-right">vs previous</th>
+                            </tr>
+                        </thead>
+                        <tbody id="deployBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="6" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-04 · Storage growth                                        -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-database mr-2 text-cyan-400"></i>Storage
+                </h2>
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] text-gray-500 uppercase tracking-widest">Daily chart</span>
+                    <select id="storageDays"
+                        class="bg-black/30 border border-gray-700 rounded px-2 py-1 text-[10px] text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer">
+                        <option value="14">14 days</option>
+                        <option value="30" selected>30 days</option>
+                        <option value="60">60 days</option>
+                        <option value="120">120 days</option>
+                    </select>
+                </div>
+            </div>
+            <p class="text-[11px] text-gray-500 mb-4">
+                Measured across everything n8n is still retaining, not just the window above.
+            </p>
+            <p id="storeUnbounded" class="hidden text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded-lg px-3 py-2 mb-4">
+                <i class="fa-solid fa-circle-info mr-1"></i>
+                No sync has reported where n8n&rsquo;s pruning stands yet, so these figures cover every
+                execution this replica knows a size for &mdash; including ones n8n has already removed.
+                They settle after the next ETL cycle.
+            </p>
+
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Retained now</p>
+                    <h3 id="storeRetained" class="text-2xl font-bold text-white">—</h3>
+                    <p id="storeExecutions" class="text-[10px] text-gray-600 mt-1">—</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Written per day</p>
+                    <h3 id="storeDaily" class="text-2xl font-bold text-indigo-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">complete, unpruned days</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Retention</p>
+                    <h3 id="storeRetention" class="text-2xl font-bold text-gray-300">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">observed, not configured</p>
+                </div>
+                <div class="bg-n8n-card p-5 rounded-xl border border-gray-800">
+                    <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Settles at</p>
+                    <h3 id="storeEquilibrium" class="text-2xl font-bold text-cyan-400">—</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">at this rate and horizon</p>
+                </div>
+            </div>
+
+            <div id="storeVerdict" class="text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-500 mb-2">
+                Measuring…
+            </div>
+            <p id="storeTrend" class="hidden text-[11px] text-gray-400 bg-black/25 border border-gray-800 rounded-lg px-3 py-2 mb-4"></p>
+
+            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 h-72 flex flex-col mb-6 mt-4">
+                <h3 class="text-sm font-semibold text-gray-400 mb-4">Payload written per day</h3>
+                <div class="flex-1 relative min-h-0">
+                    <canvas id="storageChart"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="p-4 border-b border-gray-800 bg-black/20 flex justify-between items-center">
+                    <h3 class="text-sm font-semibold text-gray-400">Where the bytes come from</h3>
+                    <span class="text-[10px] text-gray-600 uppercase tracking-widest">Highlighted above 1 MB per run</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Workflow</th>
+                                <th class="p-3 text-right">Runs</th>
+                                <th class="p-3 text-right">Total</th>
+                                <th class="p-3 text-right">Per run</th>
+                                <th class="p-3">Share</th>
+                            </tr>
+                        </thead>
+                        <tbody id="storageBody" class="divide-y divide-gray-800/50">
+                            <tr><td colspan="5" class="p-8 text-center text-gray-500 text-sm italic">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- F-18 · Business metadata                                     -->
+        <!-- ============================================================ -->
+        <!-- F-12 · Node level                                            -->
+        <!-- ============================================================ -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-stopwatch-20 mr-2 text-cyan-400"></i>Where the time goes
+                </h2>
+                <p class="text-[11px] text-gray-500">Which node, not which workflow.</p>
+            </div>
+            <p id="profileNote"
+                class="text-[11px] rounded-lg px-3 py-2 bg-black/25 border border-gray-800 text-gray-400 mb-4"></p>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+                <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                    <div class="p-4 border-b border-gray-800 bg-black/20">
+                        <h3 class="text-sm font-semibold text-gray-400">Workflows, by time per execution</h3>
+                        <p class="text-[10px] text-gray-600 mt-1">How concentrated the cost is &mdash; one
+                            expensive node is somewhere to start, eight even ones are not.</p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-black/40">
+                                <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                    <th class="p-3">Workflow</th>
+                                    <th class="p-3 text-right">Per run</th>
+                                    <th class="p-3">Heaviest node</th>
+                                    <th class="p-3 text-right">Share</th>
+                                </tr>
+                            </thead>
+                            <tbody id="profileWorkflowBody" class="divide-y divide-gray-800/50">
+                                <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                    <div class="p-4 border-b border-gray-800 bg-black/20">
+                        <h3 class="text-sm font-semibold text-gray-400">Slowest nodes anywhere</h3>
+                        <p class="text-[10px] text-gray-600 mt-1">Averaged over the executions each node
+                            actually appeared in.</p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-black/40">
+                                <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                    <th class="p-3">Node</th>
+                                    <th class="p-3 text-right">Per run</th>
+                                    <th class="p-3 text-right">Runs</th>
+                                    <th class="p-3 text-right">Items</th>
+                                </tr>
+                            </thead>
+                            <tbody id="profileNodeBody" class="divide-y divide-gray-800/50">
+                                <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading&hellip;</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="profileFlow" class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden hidden">
+                <div class="p-4 border-b border-gray-800 bg-black/20">
+                    <h3 class="text-sm font-semibold text-gray-400">Item flow, where the count changes</h3>
+                    <p class="text-[10px] text-gray-600 mt-1">Not called data loss on purpose. A node that
+                        takes 376 items and emits 5 is usually a rollup doing its job &mdash; what is worth
+                        chasing is a ratio that <em>changed</em>.</p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Workflow</th>
+                                <th class="p-3">Edge</th>
+                                <th class="p-3 text-right">In</th>
+                                <th class="p-3 text-right">Out</th>
+                                <th class="p-3 text-right">Ratio</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profileFlowBody" class="divide-y divide-gray-800/50"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <section id="metadataSection" class="mb-10 hidden">
+            <div class="flex items-baseline justify-between mb-1 gap-4 flex-wrap">
+                <h2 class="text-sm font-bold text-gray-300 uppercase tracking-widest">
+                    <i class="fa-solid fa-tags mr-2 text-teal-400"></i>Business metadata
+                </h2>
+                <p class="text-[11px] text-gray-500">What the workflows themselves record about their runs.</p>
+            </div>
+            <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-black/40">
+                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
+                                <th class="p-3">Key</th>
+                                <th class="p-3 text-right">Recorded</th>
+                                <th class="p-3 text-right">Distinct values</th>
+                                <th class="p-3">Usable as a filter</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metadataBody" class="divide-y divide-gray-800/50"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="../logic/global_functions.js"></script>
+    <script src="../logic/insights.js"></script>
+    <script src="../logic/header.js"></script>
+</body>
+</html>

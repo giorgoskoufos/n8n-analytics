@@ -158,6 +158,16 @@ const step = (n, msg) => console.log(`\n[${n}] ${msg}`);
     const after = fs.statSync(dbPath).size;
     console.log(`VACUUM: ${(before / 1048576).toFixed(1)} MB -> ${(after / 1048576).toFixed(1)} MB`);
 
+    // F-19. Nothing else in the codebase runs a VACUUM, so this is the only
+    // place that can honestly answer "when was the last one". Written after the
+    // VACUUM rather than before, so a run that dies halfway does not leave a
+    // date behind for work that did not finish.
+    await run(
+        `INSERT INTO dashboard_settings (key, value) VALUES ('last_vacuum_at', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        [new Date().toISOString()]
+    );
+
     const [{ integrity_check }] = await all('PRAGMA integrity_check');
     const [{ n }] = await all('SELECT COUNT(*) n FROM execution_entity');
     console.log(`\nintegrity_check: ${integrity_check}`);

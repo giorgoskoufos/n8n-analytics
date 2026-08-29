@@ -59,6 +59,20 @@ n8n 2.x does ship insights tables in self-hosted installs — `insights_by_perio
 - **Real-time metrics** — total executions, error counts, average runtimes, period-over-period deltas.
 - **Execution timeline** — successes vs. errors over 24h, 48h, 7d, 14d, 30d, or a custom date range, with active-bucket forecasting so the current partial bucket doesn't read as a crash.
 - **Error Intelligence** — node-level failure analysis, deduplicated error groups, category breakdown (`rate_limit`, `auth`, `network`, `config`, `data`, `logic`, `upstream`), and the upstream origin nodes that triggered each crash.
+- **Trigger-type analysis** — every figure splittable by how the execution was started. A webhook failure and a schedule failure are different problems, and one blended error rate describes neither: on the instance this was built against webhooks fail at 4.0% and schedules at 1.1%, while the dashboard reported 3.9% for everything.
+- **Queue lag** — p50/p95/p99 of the wait between an execution being created and starting, over time and per trigger type, with a backpressure signal that fires only when lag climbs while throughput does not. The first metric to move when a queue-mode instance runs short of workers, and no n8n tool measures it.
+- **Storage forecast** — which workflows the n8n database's size actually comes from, per run as well as in total, and where it is heading. Detects that n8n is pruning and predicts the plateau instead of extrapolating a straight line to a crisis that will not happen.
+- **Retry-aware error rates** — raw and effective side by side, so a failure that succeeded on the second attempt stops being counted as an outage the moment retries are switched on.
+- **Error fingerprinting** — failures grouped by what actually went wrong rather than by the text of the message. On the instance this was built against, 14,271 errors collapsed from 1,524 unreadable groups into 98 units of work.
+- **Transient vs. structural, measured** — whether a failure recovers is decided by whether the next run of that workflow succeeded, not by which category its wording falls into. Four of six groups here behaved against their label; one marked "transient" recovered 0 times out of 47.
+- **Silent death detection** — an active workflow that quietly stopped running raises nothing in n8n. This learns each workflow's own cadence and flags the ones that missed it, measured against the freshness of the data rather than the clock, so a stalled sync cannot make everything look dead.
+- **Blast radius** — which workflows share a credential or a node type, and the sub-workflow call graph. One credential here is used by 42 workflows; when it expires that is not one broken automation.
+- **Deploy correlation** — `workflowVersionId` joined to `workflow_history`, so error rates can be compared across versions of the same workflow, with the author and timestamp. Git blame for automations, which no n8n tool offers.
+- **Node-level execution** — where a workflow's time actually goes, node by node, and how many items cross each edge. One workflow here spends 99.7% of its runtime in a single node, and an AI chat model ran five times to consume 21.6 s of a 23.2 s execution — neither is visible at the workflow level. It also catches nodes that failed inside executions n8n recorded as successful, which no error rate counts.
+- **Alerting** — seven rule types (new failure, error rate, silent workflow, queue lag, volume drop, payload spike, database growth), configured in the UI, delivered by webhook, Telegram, or by triggering an n8n workflow. With deduplication and cooldown, and a refusal to fire at all when the replica is too stale to judge.
+- **Error lifecycle** — acknowledge, resolve or ignore a fingerprint with a note, and it reopens by itself if the problem comes back. Ignored problems stop alerting but keep being counted.
+- **Folders, tags and projects** — every figure filterable by n8n's own structure, with totals rolling up the folder hierarchy.
+- **Self-observability** — the dashboard reports on its own pipeline: when it last synced, how long passes take, what failed, what is queued, and how the replica is growing.
 - **ROI Analytics** — assign manual time-saved and hourly rates per workflow; get financial trends over time.
 - **Deep-linking** — one click from a failing execution into the n8n workflow editor.
 - **AI Analytics Assistant** — natural-language questions answered via a text-to-SQL pipeline ("Which workflow was slowest yesterday?").
@@ -77,12 +91,41 @@ n8n PostgreSQL  ──ETL every 5 min──▶  dashboard.sqlite  ──▶  Exp
 
 The ETL (`node-cron`) copies a narrow set of columns from n8n's `workflow_entity` and `execution_entity` into the local replica, and extracts structured error details from failed executions. Everything the dashboard renders is read from the replica.
 
-PostgreSQL is contacted in exactly three places:
-1. The ETL sync (read-only, every `SYNC_INTERVAL_MINUTES`).
+PostgreSQL is contacted in exactly four places, every one of them read-only:
+1. The ETL sync (every `SYNC_INTERVAL_MINUTES`).
 2. Login — `bcrypt` comparison against n8n's `user` table.
 3. On-demand raw trace fetch — a single row from `execution_data` when you click **Inspect** on a specific failed execution.
+4. Node profiling — a handful of `execution_data` rows per sync cycle, to work out which node in a workflow is slow. Bounded by `PROFILE_*`; see below.
 
 Nothing in the codebase writes to your n8n database.
+
+### Insights
+
+The questions the replica could not answer until it mirrored more than five columns, on one page (`/pages/insights.html`): trigger types, queue lag, reliability, real concurrency, storage growth, silent workflows, organisation, dependencies, deploys, and business metadata.
+
+Each panel states how much of its window it could actually see. The mirrored columns are NULL on every execution n8n had already pruned before the dashboard first synced them, so a chart reaching back past the retention horizon is answered from a shrinking sample — and without saying so it would show traffic collapsing in the past, which is the replica's history rather than the instance's.
+
+### Alerting
+
+Rules are defined in the UI (`/pages/alerts.html`), not in configuration. Each one is the same sentence with different nouns — *a number, over a window, compared with a threshold, on a subject* — and the subject can be the whole instance, one workflow, a folder (children included), or a tag.
+
+| Rule | Fires when |
+|---|---|
+| `new_fingerprint` | A failure nobody has seen before, judged on when the problem first appeared rather than on this window |
+| `error_rate` | A workflow is above X% over the window |
+| `silent_death` | An active workflow has been quiet for X times its own usual gap |
+| `queue_lag` | The p95 wait before starting is above X ms |
+| `volume_drop` | Executions fell below X% of the previous window |
+| `payload_spike` | Average payload per run grew X times |
+| `db_growth` | Retained execution data passed X GB |
+
+Three things it deliberately does:
+
+- **It goes quiet rather than loud when its own data is stale.** Silence is measured against the newest execution in the replica, so a stalled ETL would make every scheduled workflow look dead. If the replica is more than `ALERT_MAX_STALENESS_MS` behind, the pass does not run at all and the page says so. An alerting system that cries wolf the moment its own pipeline hiccups gets switched off within a week.
+- **It records what it suppressed.** "Why was I not told" is a question the event log has to be able to answer, so cooldowns and channel-less rules leave rows too, with the numbers behind the decision.
+- **It writes the event before it sends it.** Delivery happens outside the replica's write lock — a slow webhook must not hold up the ETL — and a crash mid-send leaves a durable record the next pass retries rather than an alert nobody hears about.
+
+Channels are webhook, Telegram, or an n8n webhook URL. The last is usually the right answer: the dashboard tells n8n, and n8n decides what to do with its own credentials, which is how email happens here without this project ever learning your SMTP password. Secrets are redacted on read and preserved when you edit a channel without retyping them. Targets on private or loopback addresses are refused unless you set `ALERT_ALLOW_PRIVATE_TARGETS=true`; link-local is always refused.
 
 ### Enabling deep historical analytics
 
@@ -174,7 +217,8 @@ Membership is re-mirrored on every sync, wholesale rather than incrementally. Th
 | `src/config/instanceLock.js` | Single-writer election for the ETL, stored in the replica itself |
 | `src/config/errorParser.js` | Error classification rules — pure, no I/O, unit-tested |
 | `src/config/openai.js` | OpenAI client initialization |
-| `src/controllers/` | Analytics, auth, and AI business logic |
+| `src/controllers/metricsController.js` | The dashboard, executions, ROI and error intelligence |
+| `src/controllers/insightsController.js` | Trigger types, queue lag, reliability, storage forecast |
 | `src/middlewares/` | `auth.js` (JWT + scope), `rateLimiter.js`, `sqliteRateStore.js`, `requestLog.js` |
 | `src/utils/scope.js` | Which workflows a user may see |
 | `src/utils/validate.js` | Input validation shared by the controllers |
@@ -205,6 +249,8 @@ Tailwind CSS v4 **is** compiled — run `npm run build:css` after editing `publi
 Two are left out on purpose. `deletedAt` would always be NULL here, because the fetch already filters soft-deleted rows out — a column that can only ever hold one value reads like an answer. `storedAt`, `deduplicationKey`, `tracingContext` and `usedPrivateCredentials` have no consumer; mirroring a column costs a write on every row forever, so each has to earn it.
 
 **Catching up** — a replica that predates those columns fills them in from Postgres over the next few sync cycles, oldest first, time-boxed so no single cycle stalls. Executions n8n has already pruned keep NULLs, which is the truthful answer rather than a guess. On the 500,000-row replica this was built against, 98,000 rows still existed upstream and the whole pass took about 35 seconds; the remaining 405,000 are history only this database still has.
+
+**Two archives, not one** — the replica deliberately outlives n8n's pruning, so "what this database knows" and "what n8n is still holding" are different sets, and they drift further apart every day. That matters to exactly one thing: the storage forecast, whose whole subject is the size of the *source*. Each ETL cycle therefore records the oldest execution id Postgres still has (`source_oldest_execution_id`, one indexed `MIN(id)`), and the forecast is bounded by it. Without that bound the panel would keep counting payload sizes for executions n8n deleted weeks ago, and report a store growing without limit — the exact false alarm it exists to prevent.
 
 ---
 
@@ -281,11 +327,33 @@ SYNC_INTERVAL_MINUTES=5          # optional, defaults to 5
 #ERROR_DETAIL_RETENTION_DAYS=30  # clears input_data; nothing in the app reads it
 #ERROR_STACK_RETENTION_DAYS=0    # keep: reclassification re-derives from it
 
+# --- Alerting --- (rules and channels are configured in the UI, not here)
+#ALERT_MAX_STALENESS_MS=1800000  # refuse to judge data older than this
+#ALERT_DELAY_MS=30000            # how long after each sync tick the pass runs
+#ALERT_ALLOW_PRIVATE_TARGETS=false  # true if your n8n is on the same network
+#ALERT_TIMEOUT_MS=10000          # per delivery attempt
+#ALERT_MAX_ATTEMPTS=4            # retries before an event is left alone
+#ALERT_EVENT_HISTORY=2000        # fired alerts kept
+
+# --- Node profiling (F-12) ---
+#PROFILE_SAMPLES=5               # successful executions read per workflow
+#PROFILE_WORKFLOWS_PER_PASS=6    # workflows refreshed per sync cycle
+#PROFILE_BUDGET_MS=15000
+#PROFILE_INTERVAL_HOURS=24       # how old a profile may get before a rebuild
+
+# --- Fingerprinting & metadata ---
+#FINGERPRINT_CHUNK=2000
+#FINGERPRINT_BUDGET_MS=10000
+#SYNC_METADATA_VALUES=true       # false keeps the keys, drops the values
+#METADATA_VALUE_MAX=512          # matches n8n's own cap
+
 # --- Logging ---
 #LOG_LEVEL=info                  # error | warn | info | debug
 #LOG_FORMAT=json                 # json | pretty (default: pretty on a TTY)
 #SLOW_REQUEST_MS=2000            # requests above this are logged at warn
 #SYNC_RUN_HISTORY=500            # rows kept in sync_runs
+#SAVE_DEBUG_ERRORS=false         # writes raw node input to disk — leave off
+#CONCURRENCY_LOOKBACK_MS=3600000 # how far back the concurrency sweep looks
 
 # --- Limits ---
 #API_RATE_LIMIT_PER_MINUTE=300   # ceiling per user across /api
@@ -400,8 +468,17 @@ These no longer prevent corruption — the lock does. They only shorten the wind
 
 Levelled and structured. `LOG_LEVEL` is `error | warn | info | debug` (default `info`), and the format defaults to human-readable on a terminal and JSON everywhere else, so a developer and a log shipper each get what they need without configuring anything.
 
+Each ETL pass reports its stages as `[n/13]`, so a sync in progress is
+distinguishable from one that finished quietly. The position is fixed per stage
+rather than counted, so `[9/13]` means the same thing on every run — and a stage
+with nothing to do prints nothing, which is why the numbers skip:
+
 ```
-INFO  [SYNC] Synced 163 workflows.
+INFO  [SYNC] [1/13] workflows — 163 synced
+INFO  [SYNC] [2/13] permissions — 1 projects, 1 memberships, 163 workflow shares
+INFO  [SYNC] [5/13] executions — 2654 new or changed (3154 rows read)
+INFO  [SYNC] [7/13] error details — 5 extracted, 0 failed, 0 still queued
+INFO  [SYNC] [13/13] replica up to date — 2654 executions synced
 INFO  [HTTP] GET /api/analytics/metrics 200 id=8f2a1c04 method=GET status=200 ms=41 user=…
 ```
 
@@ -415,6 +492,14 @@ Every ETL pass writes a row to `sync_runs`: duration, rows read, executions chan
 SELECT started_at, status, duration_ms, executions, replica_bytes/1048576 AS mb
 FROM sync_runs ORDER BY id DESC LIMIT 20;
 ```
+
+### Dashboard health
+
+The same table, read for you: **Settings → Dashboard Health**. When the last pass ran and whether it worked, a bar per pass so a pipeline getting slower is visible as a shape, the analytics queue, the fingerprint backlog, the size of the replica and what a VACUUM would reclaim.
+
+The header of every page carries the short version — *synced 3m ago*, amber when a pass is late, red when three intervals have gone by. Two ages are reported separately and on purpose: how long since the ETL finished, and how old the newest execution is. Them disagreeing is the interesting case — the pipeline is fine and n8n has gone quiet — and the panel names it rather than leaving you to infer it.
+
+This exists because it was needed. The first time it ran it reported the last ETL pass as failed, with `cannot start a transaction within a transaction`: two schedulers on one SQLite connection, opening transactions over each other. It had been written to `sync_runs` all along and nobody was reading it.
 
 ### Rate limits
 

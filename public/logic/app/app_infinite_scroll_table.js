@@ -42,10 +42,17 @@ window.loadMoreExecutions = async function(reset = false) {
                 ? `data-error-exec-id="${escapeHtml(exec.exec_id)}" style="cursor: pointer;" title="View Error"`
                 : '';
 
+            // F-17: an archived workflow is hidden from the pickers but its runs
+            // still appear here, because they happened. Marked so the row does
+            // not read as a workflow anyone can still open.
+            const archivedTag = exec.is_archived
+                ? ' <span class="text-[9px] uppercase tracking-widest text-gray-600 border border-gray-700 rounded px-1 py-0.5 ml-1">archived</span>'
+                : '';
+
             rows.push(`
                 <tr class="hover:bg-gray-800/30 transition-colors text-sm border-b border-gray-800/50" ${actionAttr}>
                     <td class="p-4 text-gray-500 font-mono">#${escapeHtml(exec.exec_id)}</td>
-                    <td class="p-4 text-white">${escapeHtml(exec.name)}</td>
+                    <td class="p-4 text-white">${escapeHtml(exec.name)}${archivedTag}</td>
                     <td class="p-4">${statusHtml}</td>
                     <td class="p-4 text-n8n-text">${escapeHtml(startStr)}</td>
                     <td class="p-4 text-n8n-text">${escapeHtml(endStr)}</td>
@@ -107,14 +114,21 @@ window.refreshData = async function() {
 }
 
 window.fetchConcurrency = async function(dateVal) {
-    let url = '/api/analytics/execution-volume';
+    const params = new URLSearchParams();
 
     if (dateVal) {
         // Construct Local 00:00:00 to 23:59:59 times
         const start = new Date(dateVal + 'T00:00:00');
         const end = new Date(dateVal + 'T23:59:59.999');
-        url += `?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`;
+        params.append('start', start.toISOString());
+        params.append('end', end.toISOString());
     }
+    // Carried through to the drill-down as well, in fetchConcurrencyDetails —
+    // a bar and the list behind it have to be counting the same rows.
+    if (window.currentMode && window.currentMode()) params.append('mode', window.currentMode());
+
+    const qs = params.toString();
+    const url = '/api/analytics/execution-volume' + (qs ? `?${qs}` : '');
 
     const concRes = await fetchWithAuth(url);
     if (concRes.ok) {
@@ -199,7 +213,13 @@ window.initDateFilter = async function() {
     await initDateFilter();
     initExecutionsHeader(); // Initialize filters on boot
 
+    // 'change', not the click dispatcher: at click time a <select> still holds
+    // its previous value, so a dispatched handler would filter by whatever was
+    // selected before.
     const wfFilter = document.getElementById('workflowFilter');
     if (wfFilter) wfFilter.addEventListener('change', refreshData);
+
+    const modeFilter = document.getElementById('modeFilter');
+    if (modeFilter) modeFilter.addEventListener('change', refreshData);
 })();
 

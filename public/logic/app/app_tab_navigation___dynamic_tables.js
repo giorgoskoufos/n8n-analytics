@@ -1,4 +1,12 @@
 // --- SECTION 7: TAB NAVIGATION & DYNAMIC TABLES ---
+// F-17: archived workflows keep their history in these aggregates — it is real
+// and it happened — but nothing else on the page says they are retired, and
+// "why is a dead workflow in my slowest list" is a question worth answering in
+// the row itself.
+const archivedBadge = (isArchived) => isArchived
+    ? ' <span class="text-[9px] uppercase tracking-widest text-gray-600 border border-gray-700 rounded px-1 py-0.5 ml-1">archived</span>'
+    : '';
+
 window.switchTab = async function(tabName) {
     if (currentTab === tabName) return;
     currentTab = tabName;
@@ -47,7 +55,7 @@ window.switchTab = async function(tabName) {
                 const avgTime = parseFloat(row.avg_duration).toFixed(3) + 's';
                 return `
                     <tr class="hover:bg-gray-800/30 transition-colors text-sm border-b border-gray-800/50">
-                        <td class="p-4 text-white">${escapeHtml(row.name)}</td>
+                        <td class="p-4 text-white">${escapeHtml(row.name)}${archivedBadge(row.is_archived)}</td>
                         <td class="p-4 text-orange-400 font-mono">${escapeHtml(avgTime)}</td>
                         <td class="p-4 text-n8n-text">${parseInt(row.total_runs).toLocaleString()}</td>
                     </tr>
@@ -75,7 +83,7 @@ window.switchTab = async function(tabName) {
                 const rate = ((errCount / totalRuns) * 100).toFixed(1) + '%';
                 return `
                     <tr class="hover:bg-gray-800/30 transition-colors text-sm border-b border-gray-800/50">
-                        <td class="p-4 text-white">${escapeHtml(row.name)}</td>
+                        <td class="p-4 text-white">${escapeHtml(row.name)}${archivedBadge(row.is_archived)}</td>
                         <td class="p-4 text-n8n-danger font-bold">${errCount.toLocaleString()}</td>
                         <td class="p-4 text-n8n-text">${totalRuns.toLocaleString()}</td>
                         <td class="p-4 text-n8n-text">${rate}</td>

@@ -45,22 +45,32 @@
     if (savePrefsBtn) {
         savePrefsBtn.addEventListener('click', async () => {
             const tz = document.getElementById('timezoneSelect').value;
+            const limitEl = document.getElementById('concurrencyLimitInput');
             savePrefsBtn.disabled = true;
             savePrefsBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-            
+
+            // One request per key, because the endpoint validates one key per
+            // call — an allowlist that took a whole object would have to decide
+            // what to do with a payload that is half valid, and every answer to
+            // that is worse than not accepting it.
+            const prefs = [{ key: 'timezone', value: tz }];
+            if (limitEl) prefs.push({ key: 'concurrency_limit', value: limitEl.value.trim() });
+
             try {
-                const res = await window.fetchWithAuth('/api/settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: 'timezone', value: tz })
-                });
-                
-                // The server's own message, not a generic one. This endpoint is
-                // owner/admin only, and "Error saving preferences" would leave a
-                // member guessing at a permission problem.
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.error || 'Failed to save preference');
+                for (const pref of prefs) {
+                    const res = await window.fetchWithAuth('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(pref)
+                    });
+
+                    // The server's own message, not a generic one. This endpoint
+                    // is owner/admin only, and "Error saving preferences" would
+                    // leave a member guessing at a permission problem.
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || 'Failed to save preference');
+                    }
                 }
                 
                 savePrefsBtn.innerHTML = '<i class="fa-solid fa-check"></i> Saved';

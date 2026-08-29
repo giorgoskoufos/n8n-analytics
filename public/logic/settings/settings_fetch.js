@@ -8,6 +8,8 @@
             if (window.globalSettings.timezone) {
                 document.getElementById('timezoneSelect').value = window.globalSettings.timezone;
             }
+            const limitEl = document.getElementById('concurrencyLimitInput');
+            if (limitEl) limitEl.value = window.globalSettings.concurrency_limit || '';
         }
     } catch (err) { console.error("Failed to load global settings", err); }
 

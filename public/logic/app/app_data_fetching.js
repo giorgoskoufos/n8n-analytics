@@ -36,6 +36,27 @@ window.setConcPreset = (hours) => {
     fetchConcurrency(null); // Fetch rolling 24h
 };
 
+/**
+ * The trigger-type filter (F-02).
+ *
+ * Read from one place because it has to reach three endpoints — the KPI row, the
+ * executions table and the volume chart. The volume chart in particular: if the
+ * bars were filtered and the drill-down behind them was not, clicking a bar of
+ * height 12 would open a list of 30, which is exactly the bug L-30 fixed.
+ */
+window.currentMode = () => document.getElementById('modeFilter')?.value || '';
+
+window.toggleArchived = function () {
+    window.showArchived = !window.showArchived;
+    const btn = document.getElementById('archivedToggle');
+    if (btn) {
+        btn.classList.toggle('text-indigo-300', window.showArchived);
+        btn.classList.toggle('text-gray-600', !window.showArchived);
+        btn.title = window.showArchived ? 'Hide archived workflows' : 'Show archived workflows';
+    }
+    populateDropdown(window.lastTopWorkflows);
+};
+
 window.fetchMetricsData = async function() {
     const wfFilter = document.getElementById('workflowFilter')?.value || '';
     const rangeStart = document.getElementById('rangeStart')?.value || '';
@@ -51,6 +72,7 @@ window.fetchMetricsData = async function() {
 
     const params = new URLSearchParams();
     if (wfFilter) params.append('workflow', wfFilter);
+    if (window.currentMode()) params.append('mode', window.currentMode());
 
     if (window.lastPresetHours) {
         // STRICT PRECISION: Use exact rolling window
@@ -107,6 +129,7 @@ window.fetchExecutions = async function(offset, limit) {
         if (startDt) params.append('from', startDt.toISOString());
         if (endDt) params.append('toStop', endDt.toISOString());
         if (minDur && parseFloat(minDur) > 0) params.append('minDuration', parseFloat(minDur));
+        if (window.currentMode()) params.append('mode', window.currentMode());
 
         const response = await fetchWithAuth(`/api/analytics/executions?${params.toString()}`);
         return response.ok ? await response.json() : [];

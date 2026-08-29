@@ -17,9 +17,17 @@
                 class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
                 <i class="fa-solid fa-chart-pie fa-fw mr-3 w-4"></i>Dashboard
             </a>
+            <a href="pages/insights.html" id="nav-insights"
+                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
+                <i class="fa-solid fa-magnifying-glass-chart fa-fw mr-3 w-4 text-indigo-400"></i>Insights
+            </a>
             <a href="pages/errors.html" id="nav-errors"
                 class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
                 <i class="fa-solid fa-triangle-exclamation fa-fw mr-3 w-4 text-red-400"></i>Error Analytics
+            </a>
+            <a href="pages/alerts.html" id="nav-alerts"
+                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
+                <i class="fa-solid fa-bell fa-fw mr-3 w-4 text-amber-400"></i>Alerts
             </a>
             <a href="pages/roi.html" id="nav-roi"
                 class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
@@ -42,6 +50,15 @@
                 <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Checking
             </div>
         </div>
+    </div>
+
+    <!-- MIDDLE: F-19 sync lag.
+         Every number on every page is as old as the last ETL pass, and until now
+         nothing said so. Hidden below md: on a phone the brand and the burger
+         already fill the row, and a truncated status line is worse than none. -->
+    <div id="syncLagIndicator"
+        class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+        <i class="fa-solid fa-circle-notch fa-spin"></i><span id="syncLagText">Checking</span>
     </div>
 
     <!-- RIGHT: Brand Section (Title + Logo) -->

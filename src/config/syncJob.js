@@ -3,7 +3,9 @@ const localDb = require('./localDb');
 const fs = require('fs');
 const path = require('path');
 const { parse } = require('flatted');
+const { summariseTrace } = require('../utils/trace');
 const { resolveError, extractHttpCode, CLASSIFIER_VERSION } = require('./errorParser');
+const { fingerprintOf, FINGERPRINT_VERSION } = require('./fingerprint');
 const {
     EXECUTION_MIRROR_COLUMNS, WORKFLOW_MIRROR_COLUMNS, TRANSIENT_INDEXES, mirrorPlan, toSqlite
 } = require('./schema');
@@ -111,6 +113,60 @@ function getTableColumns(table) {
 
 const getExecutionColumns = () => getTableColumns('execution_entity');
 
+// ==========================================================================
+// Progress numbering
+// ==========================================================================
+
+/**
+ * The ETL pass, in order, as data.
+ *
+ * The log used to be a wall of unrelated sentences, so watching a sync meant
+ * knowing which line came before which — and there was no way to tell "still
+ * working" from "finished quietly". Numbering fixes that, but only if the
+ * numbers cannot drift from the work, which is why the order lives here rather
+ * than as literals at each call site.
+ *
+ * Gaps are expected and are information. A step that had nothing to do prints
+ * nothing, so `[1/13] … [5/13] … [13/13]` says the three in between were
+ * no-ops — which on a healthy instance is most of them, most of the time.
+ */
+const PASS_STEPS = [
+    ['workflows', 'workflows'],
+    ['authorization', 'permissions'],
+    ['statistics', 'workflow counters'],
+    ['organisation', 'folders, tags and versions'],
+    ['executions', 'executions'],
+    ['volume', 'volume buckets'],
+    ['analytics', 'error details'],
+    ['reclassify', 'reclassification'],
+    ['retention', 'retention'],
+    ['backfill', 'column backfill'],
+    ['fingerprints', 'fingerprints'],
+    ['profiling', 'node profiling'],
+    ['done', 'replica up to date']
+];
+
+/**
+ * One numbered progress line.
+ *
+ * The position comes from PASS_STEPS, not from a counter, so a step that is
+ * skipped does not renumber the ones after it — `[9/13]` means the same stage
+ * of the pass on every run, which is the only way the numbers are worth
+ * printing at all.
+ *
+ * An unknown key is a bug in this file and says so rather than printing
+ * `[0/13]`, which reads like a real step.
+ */
+function step(key, detail) {
+    const index = PASS_STEPS.findIndex(([k]) => k === key);
+    if (index === -1) {
+        log.warn(`Unnumbered ETL step "${key}": ${detail}`);
+        return;
+    }
+    const [, label] = PASS_STEPS[index];
+    log.info(`[${index + 1}/${PASS_STEPS.length}] ${label} — ${detail}`);
+}
+
 // Returns a result object rather than nothing, because the caller cannot
 // otherwise tell "synced" from "silently skipped" — /api/sync/force used to
 // answer "Sync Complete" to a request that did no work at all.
@@ -129,6 +185,18 @@ async function syncData() {
     }
 
     isSyncing = true;
+    try {
+        // isSyncing stops a second ETL pass. This stops the fingerprint backfill
+        // and the alert pass — which run on their own timers and write through
+        // the same connection — from opening a transaction inside this one.
+        return await localDb.exclusive(runSyncPass);
+    } finally {
+        isSyncing = false;
+    }
+}
+
+/** One ETL pass. Always called with the write gate held. */
+async function runSyncPass() {
     const runStartedAt = new Date();
     const runStartedHr = process.hrtime.bigint();
     log.info('Starting ETL Sync...');
@@ -151,13 +219,23 @@ async function syncData() {
             workflows.rows.map(w => [w.id, w.name, toSqlite(w.active), ...wfPlan.values(w)])
         );
         await localDb.execute('COMMIT');
-        log.info(`Synced ${workflows.rows.length} workflows.`);
+        step('workflows', `${workflows.rows.length} synced`);
 
         // 1b. Sync who may see what. Runs right after the workflows so the ids it
         //     references already exist locally. Never throws: a dashboard that
         //     cannot refresh membership should keep serving the last known one,
         //     not stop syncing executions.
         await syncAuthorization();
+
+        // 1c. n8n's own per-workflow counters (F-09). Cheap, and the only source
+        //     that outlives execution pruning.
+        const statistics = await syncWorkflowStatistics();
+        if (statistics) step('statistics', `${statistics} workflows`);
+
+        // 1d. Folders, tags, version history, dependencies, credentials by name,
+        //     business metadata (F-16, F-11, F-10, F-18). A few thousand rows in
+        //     total; each answers a question the executions alone cannot.
+        const organisation = await syncOrganisation();
 
         // 2. Sync Executions
         //
@@ -371,7 +449,7 @@ async function syncData() {
         }
         // Reports what actually changed, not how many rows the overlap happened to
         // re-read — otherwise every idle cycle would claim it synced 500 executions.
-        log.info(`${syncedCount} new or changed executions (${newExecs.rows.length} rows read).`);
+        step('executions', `${syncedCount} new or changed (${newExecs.rows.length} rows read)`);
 
         // 3. Update Concurrency Stats (UTC Standardized)
         await updateExecutionVolumeStats();
@@ -400,6 +478,22 @@ async function syncData() {
         // before it spends any on history.
         const backfilled = await backfillMirroredColumns(execPlan);
 
+        // F-07's equivalent, for the errors stored before fingerprinting existed.
+        // Deliberately after the reclassification above: that pass rewrites
+        // error_message, and the fingerprint is derived from it.
+        //
+        // Also scheduled independently of this cycle (server.js), because unlike
+        // everything else here it reads and writes only the replica. Trapping it
+        // inside a cycle that aborts the moment Postgres is unreachable would
+        // mean an instance whose source is down can never group the error history
+        // it already has — and that history is precisely what someone is looking
+        // at while the source is down.
+        const fingerprinted = await backfillFingerprints();
+        const profiled = await profileWorkflowNodes();
+
+        // Where n8n's own pruning currently stands (F-04).
+        await recordSourceHorizon();
+
         const result = {
             status: 'ok',
             workflows: workflows.rows.length,
@@ -409,8 +503,13 @@ async function syncData() {
             analytics,
             reclassified: reclassified.ran ? reclassified.changed : 0,
             purged,
-            backfilled
+            backfilled,
+            fingerprinted,
+            profiled,
+            statistics,
+            organisation
         };
+        step('done', `${syncedCount} executions synced`);
         await recordSyncRun(runStartedAt, runStartedHr, result);
         return result;
 
@@ -420,8 +519,6 @@ async function syncData() {
         const failure = { status: 'failed', error: err.message };
         await recordSyncRun(runStartedAt, runStartedHr, failure);
         return failure;
-    } finally {
-        isSyncing = false;
     }
 }
 
@@ -476,11 +573,10 @@ async function purgeExpiredErrorDetail() {
         const input = await purge('input_data', ERROR_INPUT_RETENTION_DAYS);
         const stack = await purge('error_stack', ERROR_STACK_RETENTION_DAYS);
         if (input || stack) {
-            log.info(
-                `Retention: cleared input_data on ${input} rows` +
-                `${stack ? `, error_stack on ${stack}` : ''}. ` +
-                'Run optimizeReplica.js --apply to reclaim the file space.'
-            );
+            step('retention',
+                `cleared input_data on ${input} rows` +
+                `${stack ? `, error_stack on ${stack}` : ''} ` +
+                '(run optimizeReplica.js --apply to reclaim the space)');
         }
         return { input, stack };
     } catch (err) {
@@ -507,6 +603,44 @@ async function putSetting(key, value) {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
         [key, value]
     );
+}
+
+// The oldest execution n8n itself still has (F-04).
+const SOURCE_HORIZON_KEY = 'source_oldest_execution_id';
+
+/**
+ * Records where n8n's pruning currently stands.
+ *
+ * F-04 needs to answer "how large is the n8n database and why", and the obvious
+ * proxy — every local row that carries a payload size — is only correct for as
+ * long as the backfill has just finished. This replica deliberately keeps
+ * history that Postgres has already pruned, and it keeps those rows' sizes with
+ * it. A month from now, today's executions will be gone from n8n while their
+ * `jsonSizeBytes` sit here unchanged, and a "retained bytes" figure built from
+ * them would report a store roughly twice the size of the real one, growing
+ * forever, and be believed.
+ *
+ * So the prune horizon is asked for rather than inferred. `MIN(id)` on the
+ * source's primary key is an index seek — the cheapest question available — and
+ * it self-corrects every cycle as the sweep advances.
+ *
+ * Never throws. This is a refinement to one panel; a source that will not answer
+ * it must not fail the cycle that just moved thousands of executions.
+ */
+async function recordSourceHorizon() {
+    try {
+        const r = await pool.query(
+            'SELECT MIN(id) AS oldest FROM execution_entity WHERE "deletedAt" IS NULL'
+        );
+        const oldest = r.rows[0] && r.rows[0].oldest;
+        if (oldest === null || oldest === undefined) return null;
+        // int8 arrives as a string from node-postgres; stored as text either way.
+        await putSetting(SOURCE_HORIZON_KEY, String(oldest));
+        return String(oldest);
+    } catch (err) {
+        log.warn('Could not read the source prune horizon:', err.message);
+        return null;
+    }
 }
 
 /**
@@ -562,13 +696,11 @@ async function backfillMirroredColumns(plan) {
                 // behind it would hold an entry for every row Postgres has
                 // already pruned — 404,632 of them here, 4.7 MB — to serve a
                 // query that will never run again.
-                for (const name of TRANSIENT_INDEXES) {
-                    await localDb.execute(`DROP INDEX IF EXISTS ${name}`);
-                }
-                log.info(
-                    `Backfill complete: ${filled} of ${examined} remaining rows filled ` +
-                    'this pass; the rest are no longer in Postgres.'
-                );
+                await localDb.execute(
+                    `DROP INDEX IF EXISTS ${TRANSIENT_INDEXES.mirrorBackfill}`);
+                step('backfill',
+                    `complete — ${filled} of ${examined} remaining rows filled this pass; ` +
+                    'the rest are no longer in Postgres');
                 return { filled, done: true };
             }
 
@@ -607,10 +739,9 @@ async function backfillMirroredColumns(plan) {
                     'SELECT COUNT(*) AS n FROM execution_entity WHERE id > ? AND mode IS NULL',
                     [cursor]
                 );
-                log.info(
-                    `Backfill paused at execution ${cursor}: ${filled} rows filled this pass, ` +
-                    `${left.rows[0].n} still to examine. Resuming next cycle.`
-                );
+                step('backfill',
+                    `paused at execution ${cursor} — ${filled} rows filled, ` +
+                    `${left.rows[0].n} still to examine`);
                 return { filled, done: false };
             }
         }
@@ -758,10 +889,9 @@ async function syncAuthorization() {
         }
 
         invalidateScopeCache();
-        log.info(
-            `Authorization mirrored: ${projects.length} projects, ` +
-            `${relations.length} memberships, ${shares.length} workflow shares.`
-        );
+        step('authorization',
+            `${projects.length} projects, ${relations.length} memberships, ` +
+            `${shares.length} workflow shares`);
     } catch (err) {
         // Deliberately swallowed. Executions are the reason this job exists; a
         // membership refresh that failed this cycle will be retried in five
@@ -844,10 +974,8 @@ async function updateExecutionVolumeStats() {
                 changed
             );
             await localDb.execute('COMMIT');
-            log.info(
-                `Execution volume: ${changed.length} of ${BUCKETS} buckets changed` +
-                `${dropped.changes ? `, ${dropped.changes} expired` : ''}.`
-            );
+            step('volume', `${changed.length} of ${BUCKETS} buckets changed` +
+                `${dropped.changes ? `, ${dropped.changes} expired` : ''}`);
         } catch (e) {
             await localDb.execute('ROLLBACK');
             throw e;
@@ -880,7 +1008,7 @@ async function reclassifyIfNeeded() {
     log.info(`Classifier rules changed (v${current} -> v${CLASSIFIER_VERSION}). Re-classifying stored errors…`);
 
     const rows = await localDb.query(
-        `SELECT id, error_message, error_type, error_stack, node_type, error_category, http_code
+        `SELECT id, error_message, error_type, error_stack, node_type, error_category, http_code, timestamp
            FROM execution_error_analytics`
     );
 
@@ -894,12 +1022,18 @@ async function reclassifyIfNeeded() {
                 next.errorType === (r.error_type || '') &&
                 next.errorCategory === r.error_category) continue;
 
+            // The fingerprint is derived from the message, so rewriting the
+            // message without recomputing it would leave the row filed under the
+            // identity of text it no longer contains — and the group it belonged
+            // to would quietly gain a member that does not match it.
+            const refp = fingerprintOf(next.errorMessage, r.node_type, next.errorType);
             await localDb.execute(
                 `UPDATE execution_error_analytics
-                    SET error_message = ?, error_type = ?, error_category = ?
+                    SET error_message = ?, error_type = ?, error_category = ?, fingerprint = ?
                   WHERE id = ?`,
-                [next.errorMessage, next.errorType, next.errorCategory, r.id]
+                [next.errorMessage, next.errorType, next.errorCategory, refp.fingerprint, r.id]
             );
+            await registerFingerprint(refp, next.errorMessage, r.node_type, next.errorType, r.timestamp);
             changed++;
         }
 
@@ -918,8 +1052,637 @@ async function reclassifyIfNeeded() {
         return { ran: false, error: e.message };
     }
 
-    log.info(`Re-classified ${changed} of ${rows.rows.length} stored errors.`);
+    step('reclassify', `${changed} of ${rows.rows.length} stored errors rewritten`);
     return { ran: true, changed, total: rows.rows.length };
+}
+
+/**
+ * Mirrors n8n's own per-workflow counters (F-09).
+ *
+ * One row per (workflow, event type) holding a count and the timestamp of the
+ * most recent occurrence. Small — 175 rows on this instance — and replaced
+ * wholesale, like the authorization mirror, because a workflow deleted upstream
+ * should stop appearing here rather than linger.
+ *
+ * Its value is that it outlives pruning. Execution rows age out; these counters
+ * do not, so a workflow whose entire history has been deleted still reports when
+ * it last ran. That is the second opinion the silent-death detector needs: on
+ * its own, "no executions in the replica" cannot distinguish a workflow that
+ * stopped from one whose rows were simply pruned.
+ *
+ * Never throws. It is a cross-check for one panel, not a reason to fail a cycle
+ * that has already moved thousands of executions.
+ */
+async function syncWorkflowStatistics() {
+    try {
+        const columns = await getTableColumns('workflow_statistics');
+        if (columns.size === 0) return 0;
+
+        const src = await pool.query(
+            'SELECT "workflowId", name, count, "latestEvent" FROM workflow_statistics'
+        );
+        const rows = src.rows.map((r) => [
+            r.workflowId, r.name, r.count === null ? null : Number(r.count), toSqlite(r.latestEvent)
+        ]);
+
+        await localDb.execute('BEGIN TRANSACTION');
+        try {
+            await localDb.execute('DELETE FROM workflow_statistics');
+            await localDb.executeMany(
+                `INSERT OR REPLACE INTO workflow_statistics (workflow_id, name, count, latest_event)
+                 VALUES (?, ?, ?, ?)`,
+                rows
+            );
+            await localDb.execute('COMMIT');
+        } catch (e) {
+            try { await localDb.execute('ROLLBACK'); } catch (ignored) { /* the log below matters */ }
+            throw e;
+        }
+        return rows.length;
+    } catch (err) {
+        log.warn('Could not mirror workflow_statistics:', err.message);
+        return 0;
+    }
+}
+
+// ==========================================================================
+// F-16 / F-10 / F-11 / F-18 · The organisational and dependency graph
+// ==========================================================================
+
+// Values longer than this are stored cut short. n8n's own layer already caps
+// these at 512 characters, so in practice this bound matches rather than
+// tightens it — it is here so the replica's promise does not depend on that
+// staying true upstream. See the migration comment for why the column needs
+// care at all.
+const METADATA_VALUE_MAX = Number(process.env.METADATA_VALUE_MAX) || 512;
+
+// An operator who would rather no business values were mirrored at all can say
+// so. Keys are always kept: they describe what a workflow records, not what it
+// recorded, and the dynamic filter list is built from them.
+const SYNC_METADATA_VALUES = process.env.SYNC_METADATA_VALUES !== 'false';
+
+/**
+ * Mirrors one small source table wholesale.
+ *
+ * Replace-all rather than upsert, for the same reason the authorization mirror
+ * does it: every table here expresses a *current* state, and a row disappearing
+ * upstream is meaningful. A tag removed from a workflow, a folder deleted, a
+ * credential revoked — an upsert-only sync can never observe any of those, and
+ * would show them forever.
+ *
+ * Never throws. These feed panels, not the core; a source that will not answer
+ * must not fail a cycle that has already moved thousands of executions.
+ */
+async function mirrorTable(sourceTable, localTable, columns, mapRow) {
+    try {
+        const available = await getTableColumns(sourceTable);
+        if (available.size === 0) return 0;
+
+        const missing = columns.filter((c) => !available.has(c));
+        if (missing.length > 0) {
+            log.warn(`${sourceTable} is missing ${missing.join(', ')} — not mirrored.`);
+            return 0;
+        }
+
+        const quoted = columns.map((c) => `"${c}"`).join(', ');
+        const src = await pool.query(`SELECT ${quoted} FROM "${sourceTable}"`);
+        const rows = src.rows.map(mapRow).filter(Boolean);
+        const placeholders = rows.length ? rows[0].map(() => '?').join(', ') : '';
+
+        await localDb.execute('BEGIN TRANSACTION');
+        try {
+            await localDb.execute(`DELETE FROM ${localTable}`);
+            if (rows.length > 0) {
+                await localDb.executeMany(
+                    `INSERT OR REPLACE INTO ${localTable} VALUES (${placeholders})`, rows
+                );
+            }
+            await localDb.execute('COMMIT');
+        } catch (e) {
+            try { await localDb.execute('ROLLBACK'); } catch (ignored) { /* the log below matters */ }
+            throw e;
+        }
+        return rows.length;
+    } catch (err) {
+        log.warn(`Could not mirror ${sourceTable}:`, err.message);
+        return 0;
+    }
+}
+
+/**
+ * Everything organisational, in one pass.
+ *
+ * Six tables totalling a few thousand rows against half a million executions, so
+ * the cost is noise; they are grouped because they are read together and because
+ * one failure among them should not look like six.
+ */
+async function syncOrganisation() {
+    const folders = await mirrorTable(
+        'folder', 'folder',
+        ['id', 'name', 'parentFolderId', 'projectId', 'createdAt', 'updatedAt'],
+        (r) => [r.id, r.name, r.parentFolderId, r.projectId,
+            toSqlite(r.createdAt), toSqlite(r.updatedAt)]
+    );
+
+    const tags = await mirrorTable(
+        'tag_entity', 'tag_entity', ['id', 'name'], (r) => [r.id, r.name]
+    );
+
+    const workflowTags = await mirrorTable(
+        'workflows_tags', 'workflows_tags', ['workflowId', 'tagId'],
+        (r) => [r.workflowId, r.tagId]
+    );
+
+    // F-11. `nodes` and `connections` are excluded by not being named here — they
+    // are the workflow definition itself, and nothing in this dashboard renders
+    // one.
+    const history = await mirrorTable(
+        'workflow_history', 'workflow_history',
+        ['versionId', 'workflowId', 'authors', 'name', 'autosaved', 'createdAt'],
+        (r) => [r.versionId, r.workflowId, r.authors, r.name,
+            toSqlite(r.autosaved), toSqlite(r.createdAt)]
+    );
+
+    // F-10. dependencyInfo is a JSON object holding n8n's node id and version;
+    // only the node id is kept, because that is what lets a dependency be traced
+    // back to a specific node in the editor.
+    const dependencies = await mirrorTable(
+        'workflow_dependency', 'workflow_dependency',
+        ['id', 'workflowId', 'workflowVersionId', 'publishedVersionId',
+            'dependencyType', 'dependencyKey', 'dependencyInfo', 'createdAt'],
+        (r) => [r.id, r.workflowId, r.workflowVersionId, r.publishedVersionId,
+            r.dependencyType, r.dependencyKey,
+            (r.dependencyInfo && r.dependencyInfo.nodeId) || null,
+            toSqlite(r.createdAt)]
+    );
+
+    // F-10's other half. `data` is not in this list and must never be: it is the
+    // encrypted credential blob.
+    const credentials = await mirrorTable(
+        'credentials_entity', 'credentials_entity',
+        ['id', 'name', 'type', 'isManaged', 'createdAt', 'updatedAt'],
+        (r) => [r.id, r.name, r.type, toSqlite(r.isManaged),
+            toSqlite(r.createdAt), toSqlite(r.updatedAt)]
+    );
+
+    // F-18.
+    const metadata = await mirrorTable(
+        'execution_metadata', 'execution_metadata',
+        ['id', 'executionId', 'key', 'value'],
+        (r) => {
+            const raw = r.value === null || r.value === undefined ? null : String(r.value);
+            if (!SYNC_METADATA_VALUES) return [r.id, r.executionId, r.key, null, 0];
+            const truncated = raw !== null && raw.length > METADATA_VALUE_MAX;
+            return [r.id, r.executionId, r.key,
+                truncated ? raw.slice(0, METADATA_VALUE_MAX) : raw, truncated ? 1 : 0];
+        }
+    );
+
+    step('organisation',
+        `${folders} folders, ${tags} tags, ${workflowTags} workflow tags, ${history} versions, ` +
+        `${dependencies} dependencies, ${credentials} credentials, ${metadata} metadata rows`);
+    return { folders, tags, workflowTags, history, dependencies, credentials, metadata };
+}
+
+// ==========================================================================
+// F-07 · Fingerprints
+// ==========================================================================
+
+const FP_CURSOR_KEY = 'fingerprint_cursor';
+const FP_VERSION_KEY = 'fingerprint_version';
+
+// Same shape and reasoning as the F-01 backfill: chunked so a crash costs one
+// chunk, time-boxed so today's data is never starved by history.
+const FP_CHUNK = Number(process.env.FINGERPRINT_CHUNK) || 2000;
+const FP_BUDGET_MS = Number(process.env.FINGERPRINT_BUDGET_MS) || 10000;
+
+/**
+ * Ensures a fingerprint has a row of its own.
+ *
+ * The row holds what cannot be derived: when the problem was first seen, and
+ * whatever a human has since decided about it. Counts are deliberately absent —
+ * they are one GROUP BY away in execution_error_analytics, and a stored copy is
+ * a second source of truth for the same number.
+ *
+ * `first_seen` takes the MIN of what is stored and what is arriving, because the
+ * backfill walks the table in id order while the ETL writes newest-first, so
+ * this is routinely reached with an older timestamp after a newer one.
+ */
+async function registerFingerprint(fp, sampleMessage, nodeType, errorType, seenAt,
+    { reopenIfResolved = false } = {}) {
+    const when = seenAt || new Date().toISOString();
+    const sample = sampleMessage === null || sampleMessage === undefined
+        ? null : String(sampleMessage).slice(0, 2000);
+    await localDb.execute(
+        `INSERT INTO error_fingerprints
+             (fingerprint, normalized_message, sample_message, node_type, error_type,
+              first_seen, status, version)
+         VALUES (?, ?, ?, ?, ?, ?, 'open', ?)
+         ON CONFLICT(fingerprint) DO UPDATE SET
+             first_seen = MIN(error_fingerprints.first_seen, excluded.first_seen),
+             normalized_message = excluded.normalized_message,
+             version = excluded.version`,
+        [fp.fingerprint, fp.normalized, sample, nodeType || null, errorType || null,
+            when, FINGERPRINT_VERSION]
+    );
+
+    // F-15 auto-reopen. A problem someone marked resolved and which then happened
+    // again is not resolved, and leaving it closed is how a dashboard stops being
+    // believed. Guarded on the occurrence being NEWER than the resolution, so the
+    // backfill walking years of history cannot reopen everything ever closed —
+    // and skipped outright during that walk, since none of those rows is news.
+    if (!reopenIfResolved) return;
+    const reopened = await localDb.execute(
+        `UPDATE error_fingerprints
+            SET status = 'open', status_at = ?, status_by = NULL
+          WHERE fingerprint = ? AND status = 'resolved' AND ? > IFNULL(status_at, '')`,
+        [when, fp.fingerprint, when]
+    );
+    if (reopened.changes > 0) {
+        await localDb.execute(
+            `INSERT INTO fingerprint_events (fingerprint, at, action, actor, note)
+             VALUES (?, ?, 'reopened', NULL, ?)`,
+            [fp.fingerprint, when, 'Reopened automatically: it happened again after being resolved.']
+        );
+        log.info(`Fingerprint ${fp.fingerprint} reopened — it recurred after being resolved.`);
+    }
+}
+
+/**
+ * Fingerprints the errors stored before fingerprinting existed, and
+ * re-fingerprints everything when the rules change.
+ *
+ * One pass serves both, because they are the same walk. A version bump resets
+ * the cursor to the beginning; ordinary operation resumes where it stopped. New
+ * errors never need this — they are fingerprinted as they are inserted — so in
+ * the steady state the cursor sits at 'done' and this costs one settings read
+ * per cycle.
+ *
+ * Recomputing rather than skipping non-null rows on a version bump is the whole
+ * point: a normalisation change that applied only to new errors would split
+ * every historical group in two and leave the history disagreeing with the
+ * present.
+ */
+async function backfillFingerprints() {
+    // Called both from the ETL pass (already holding the gate — exclusive() is
+    // reentrant, so this is a straight call) and from its own timer, where it
+    // has to wait for a pass that may be mid-transaction.
+    return localDb.exclusive(runFingerprintBackfill);
+}
+
+/**
+ * Rows that still carry no fingerprint, and the lowest of them.
+ *
+ * Served by idx_err_fingerprint: NULLs sort first, so this scans only the rows
+ * it finds and costs nothing once there are none — which is the steady state.
+ */
+async function unfingerprinted() {
+    const r = await localDb.query(
+        'SELECT MIN(id) AS lo, COUNT(*) AS n FROM execution_error_analytics ' +
+        'WHERE fingerprint IS NULL'
+    );
+    return r.rows[0];
+}
+
+async function runFingerprintBackfill() {
+    const versionRow = await localDb.query(
+        'SELECT value FROM dashboard_settings WHERE key = ?', [FP_VERSION_KEY]
+    );
+    const storedVersion = versionRow.rows[0] ? Number(versionRow.rows[0].value) : 0;
+
+    if (storedVersion !== FINGERPRINT_VERSION) {
+        log.info(
+            `Fingerprint rules changed (v${storedVersion} -> v${FINGERPRINT_VERSION}). ` +
+            'Recomputing stored fingerprints...'
+        );
+        // Both in one transaction: a crash between them would either redo the
+        // reset forever, or record the new version over a half-walked table.
+        await localDb.execute('BEGIN TRANSACTION');
+        try {
+            await putSetting(FP_CURSOR_KEY, '0');
+            await putSetting(FP_VERSION_KEY, String(FINGERPRINT_VERSION));
+            await localDb.execute('COMMIT');
+        } catch (e) {
+            try { await localDb.execute('ROLLBACK'); } catch (ignored) { /* the throw below matters */ }
+            throw e;
+        }
+    }
+
+    const cursorRow = await localDb.query(
+        'SELECT value FROM dashboard_settings WHERE key = ?', [FP_CURSOR_KEY]
+    );
+    const stored = cursorRow.rows[0] ? cursorRow.rows[0].value : '0';
+
+    let cursor;
+    if (stored === 'done') {
+        // 'done' means the walk reached the end once. It does not mean the table
+        // is complete, and the difference is not academic: a half-applied chunk
+        // leaves rows below the cursor that nothing would ever revisit. Checked
+        // every cycle because the check is free when there is nothing to find.
+        const missed = await unfingerprinted();
+        if (missed.n === 0) return { done: true, filled: 0 };
+        log.warn(
+            `${missed.n} error rows are unfingerprinted below a finished cursor. ` +
+            `Rewinding to ${missed.lo} to repair them.`
+        );
+        cursor = missed.lo - 1;
+    } else {
+        cursor = Number(stored) || 0;
+    }
+    let filled = 0;
+    const deadline = Date.now() + FP_BUDGET_MS;
+
+    while (Date.now() < deadline) {
+        const pending = await localDb.query(
+            `SELECT id, error_message, node_type, error_type, timestamp
+               FROM execution_error_analytics
+              WHERE id > ?
+              ORDER BY id
+              LIMIT ?`,
+            [cursor, FP_CHUNK]
+        );
+
+        if (pending.rows.length === 0) {
+            // The cursor is an optimisation, not a proof.
+            //
+            // It records how far the walk got, and everything below it is
+            // assumed finished — so a chunk that half-applied leaves rows that
+            // nothing will ever look at again. That is not hypothetical: the
+            // transaction collision between this pass and the ETL (see
+            // localDb.exclusive) left 1,149 rows unfingerprinted in the middle
+            // of the table, under a cursor that had moved on past them.
+            //
+            // So the end of the walk is verified rather than declared. If
+            // anything is still null, the cursor rewinds to just before it and
+            // the walk continues. This terminates: fingerprintOf always returns
+            // a value, so every sweep strictly reduces the count.
+            const missed = await unfingerprinted();
+            if (missed.n > 0) {
+                log.warn(
+                    `Fingerprint walk reached the end with ${missed.n} rows still ` +
+                    `unfingerprinted. Rewinding to ${missed.lo} to repair them.`
+                );
+                cursor = missed.lo - 1;
+                await putSetting(FP_CURSOR_KEY, String(cursor));
+                continue;
+            }
+
+            await putSetting(FP_CURSOR_KEY, 'done');
+            // The scaffold comes down with the building — and only this one. The
+            // other transient index belongs to a different backfill that may not
+            // have finished, which is exactly the bug a shared list produced.
+            await localDb.execute(
+                `DROP INDEX IF EXISTS ${TRANSIENT_INDEXES.fingerprintBackfill}`);
+            step('fingerprints', `complete — ${filled} rows written this pass`);
+            return { done: true, filled };
+        }
+
+        await localDb.execute('BEGIN TRANSACTION');
+        try {
+            for (const r of pending.rows) {
+                const fp = fingerprintOf(r.error_message, r.node_type, r.error_type);
+                await localDb.execute(
+                    'UPDATE execution_error_analytics SET fingerprint = ? WHERE id = ?',
+                    [fp.fingerprint, r.id]
+                );
+                await registerFingerprint(fp, r.error_message, r.node_type, r.error_type, r.timestamp);
+                filled++;
+            }
+            cursor = pending.rows[pending.rows.length - 1].id;
+            // The cursor is committed with the rows it describes. Separately, a
+            // crash between the two either redoes work or, far worse, skips it.
+            await putSetting(FP_CURSOR_KEY, String(cursor));
+            await localDb.execute('COMMIT');
+        } catch (e) {
+            try { await localDb.execute('ROLLBACK'); } catch (ignored) { /* the throw below matters */ }
+            throw e;
+        }
+    }
+
+    step('fingerprints', `paused at ${cursor} — ${filled} rows this pass`);
+    return { done: false, filled, cursor };
+}
+
+// F-12 · node profiling.
+//
+// How many executions to read per workflow, how often to re-read a workflow,
+// and how long one cycle may spend on the whole thing.
+//
+// The sample size is small on purpose. Node timings on this instance are
+// dominated by one node per workflow by a factor of ten or more — 21.6 s of a
+// 23.2 s execution in the worst case — so five samples separate the bottleneck
+// from everything else comfortably, while fifty would multiply the bytes pulled
+// out of Postgres for a sharper number nobody needs.
+const PROFILE_SAMPLES = Number(process.env.PROFILE_SAMPLES) || 5;
+const PROFILE_INTERVAL_MS = (Number(process.env.PROFILE_INTERVAL_HOURS) || 24) * 3600000;
+const PROFILE_BUDGET_MS = Number(process.env.PROFILE_BUDGET_MS) || 15000;
+const PROFILE_WORKFLOWS_PER_PASS = Number(process.env.PROFILE_WORKFLOWS_PER_PASS) || 6;
+
+/**
+ * Builds a per-node time and item profile for a few workflows each cycle.
+ *
+ * This is the only place in the codebase that reads execution payloads it was
+ * not already going to read. Everything else fetches a trace because an
+ * execution failed; this fetches successful ones, because "which node is slow"
+ * cannot be answered from the failures — the failing node stops early and the
+ * rest never run.
+ *
+ * Four things keep that affordable:
+ *
+ *   - **A sample, not a census.** PROFILE_SAMPLES executions per workflow.
+ *   - **Staleness-ordered.** The workflow profiled longest ago goes first, so a
+ *     pass that runs out of budget has still made progress on the oldest data
+ *     rather than refreshing the same workflow forever.
+ *   - **Only what changed.** A workflow with no execution newer than the one it
+ *     was last profiled against is skipped entirely — no query, no bytes.
+ *   - **Oversized traces are excluded by Postgres**, not by this process: the
+ *     length test is in the SELECT, so a 200 MB payload is never transferred to
+ *     be measured and thrown away. Same guard the error extractor uses.
+ *
+ * Never throws. Profiling is a refinement to one panel; a cycle that moved
+ * thousands of executions must not fail because a trace would not parse.
+ */
+async function profileWorkflowNodes() {
+    const deadline = Date.now() + PROFILE_BUDGET_MS;
+    const staleBefore = new Date(Date.now() - PROFILE_INTERVAL_MS).toISOString();
+
+    try {
+        // Chosen from the replica, which already knows every workflow's newest
+        // execution. Asking Postgres this would be a second round trip for
+        // something mirrored five lines earlier in the same pass.
+        const candidates = await localDb.query(
+            `SELECT w.id, w.name, MAX(e.id) AS newest, COUNT(e.id) AS runs,
+                    p.sampled_at, p.newest_execution_id
+               FROM workflow_entity w
+               JOIN execution_entity e ON e."workflowId" = w.id
+               LEFT JOIN workflow_profile_state p ON p.workflow_id = w.id
+              WHERE IFNULL(w."isArchived", 0) = 0
+                AND e.status = 'success'
+              GROUP BY w.id
+             HAVING p.sampled_at IS NULL
+                 OR (p.sampled_at < ? AND MAX(e.id) > IFNULL(p.newest_execution_id, 0))
+              ORDER BY IFNULL(p.sampled_at, '') ASC, runs DESC
+              LIMIT ?`,
+            [staleBefore, PROFILE_WORKFLOWS_PER_PASS]
+        );
+
+        if (candidates.rows.length === 0) return { profiled: 0, nodes: 0 };
+
+        let profiled = 0;
+        let nodeRows = 0;
+
+        for (const wf of candidates.rows) {
+            if (Date.now() > deadline) {
+                step('profiling', `paused — ${profiled} workflows this pass, budget spent`);
+                break;
+            }
+
+            // Successful executions only, newest first. A failed one stops at
+            // the broken node, so including them would make every node after it
+            // look like it never runs.
+            const ids = await localDb.query(
+                `SELECT id FROM execution_entity
+                  WHERE "workflowId" = ? AND status = 'success'
+                  ORDER BY id DESC LIMIT ?`,
+                [wf.id, PROFILE_SAMPLES]
+            );
+            if (ids.rows.length === 0) continue;
+
+            const idList = ids.rows.map((r) => r.id);
+            let traces;
+            try {
+                traces = await pool.query(
+                    `SELECT d."executionId" AS exec_id,
+                            CASE WHEN octet_length(d.data) > $2 THEN NULL ELSE d.data END AS data,
+                            EXTRACT(EPOCH FROM (e."stoppedAt" - e."startedAt")) * 1000 AS wall_ms
+                       FROM execution_data d
+                       JOIN execution_entity e ON e.id = d."executionId"
+                      WHERE d."executionId" = ANY($1::int[])`,
+                    [idList, MAX_PAYLOAD_BYTES]
+                );
+            } catch (err) {
+                log.warn(`Could not fetch traces for ${wf.name}:`, err.message);
+                continue;
+            }
+
+            // node name -> aggregate across the sample
+            const agg = new Map();
+            // "from|to" -> item counts across the sample
+            const edges = new Map();
+            let sampled = 0;
+            let unreadable = 0;
+            let nodeMs = 0;
+            let wallMs = 0;
+
+            for (const row of traces.rows) {
+                if (!row.data) { unreadable++; continue; }
+                let summary;
+                try {
+                    summary = summariseTrace(parse(row.data), Math.round(row.wall_ms || 0));
+                } catch (err) { unreadable++; continue; }
+                if (!summary.has_run_data) { unreadable++; continue; }
+
+                sampled++;
+                nodeMs += summary.total_node_ms;
+                wallMs += summary.wall_ms || 0;
+
+                for (const n of summary.nodes) {
+                    const cur = agg.get(n.name) || {
+                        samples: 0, runs: 0, total_ms: 0, max_ms: 0,
+                        items_out: null, failed_runs: 0, is_sub_node: n.is_sub_node,
+                        node_type: n.type
+                    };
+                    cur.samples++;
+                    cur.runs += n.runs;
+                    cur.total_ms += n.ms;
+                    cur.max_ms = Math.max(cur.max_ms, n.ms);
+                    cur.failed_runs += n.failed_runs;
+                    if (n.items_out !== null) cur.items_out = (cur.items_out || 0) + n.items_out;
+                    // Once a node has been seen writing to main it is not a sub
+                    // node, whatever a later run without output suggests.
+                    if (!n.is_sub_node) cur.is_sub_node = false;
+                    if (!cur.node_type && n.type) cur.node_type = n.type;
+                    agg.set(n.name, cur);
+                }
+
+                for (const e of summary.flow) {
+                    const key = `${e.from}\u0000${e.to}`;
+                    const cur = edges.get(key) ||
+                        { from: e.from, to: e.to, samples: 0, runs: 0, items_in: 0, items_out: 0 };
+                    cur.samples++;
+                    cur.runs += e.runs;
+                    cur.items_in += e.items_in;
+                    cur.items_out += e.items_out;
+                    edges.set(key, cur);
+                }
+            }
+
+            // Replaced, not merged: the profile is "the last N executions", and
+            // merging would blend the workflow as it is with the workflow as it
+            // was before someone fixed it — with nothing on screen to say so.
+            await localDb.exclusive(async () => {
+                await localDb.execute('BEGIN TRANSACTION');
+                try {
+                    await localDb.execute(
+                        'DELETE FROM workflow_node_profile WHERE workflow_id = ?', [wf.id]);
+                    await localDb.execute(
+                        'DELETE FROM workflow_edge_profile WHERE workflow_id = ?', [wf.id]);
+                    for (const e of edges.values()) {
+                        await localDb.execute(
+                            `INSERT INTO workflow_edge_profile
+                                (workflow_id, from_node, to_node, samples, runs, items_in, items_out)
+                             VALUES (?,?,?,?,?,?,?)`,
+                            [wf.id, e.from, e.to, e.samples, e.runs, e.items_in, e.items_out]
+                        );
+                    }
+                    for (const [name, a] of agg) {
+                        await localDb.execute(
+                            `INSERT INTO workflow_node_profile
+                                (workflow_id, node_name, samples, runs, total_ms, max_ms,
+                                 items_out, failed_runs, is_sub_node, node_type)
+                             VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                            [wf.id, name, a.samples, a.runs, Math.round(a.total_ms),
+                                Math.round(a.max_ms), a.items_out, a.failed_runs,
+                                a.is_sub_node ? 1 : 0, a.node_type]
+                        );
+                        nodeRows++;
+                    }
+                    // Written even when the sample produced nothing readable.
+                    // Otherwise a workflow whose traces never parse is retried
+                    // on every cycle for the life of the deployment.
+                    await localDb.execute(
+                        `INSERT INTO workflow_profile_state
+                            (workflow_id, sampled_at, executions_sampled, executions_unreadable,
+                             newest_execution_id, total_node_ms, total_wall_ms)
+                         VALUES (?,?,?,?,?,?,?)
+                         ON CONFLICT(workflow_id) DO UPDATE SET
+                            sampled_at = excluded.sampled_at,
+                            executions_sampled = excluded.executions_sampled,
+                            executions_unreadable = excluded.executions_unreadable,
+                            newest_execution_id = excluded.newest_execution_id,
+                            total_node_ms = excluded.total_node_ms,
+                            total_wall_ms = excluded.total_wall_ms`,
+                        [wf.id, new Date().toISOString(), sampled, unreadable,
+                            idList[0], Math.round(nodeMs), Math.round(wallMs)]
+                    );
+                    await localDb.execute('COMMIT');
+                } catch (err) {
+                    try { await localDb.execute('ROLLBACK'); } catch (ignored) { /* the log below matters */ }
+                    throw err;
+                }
+            });
+
+            profiled++;
+        }
+
+        if (profiled > 0) {
+            step('profiling', `${profiled} workflow(s), ${nodeRows} node rows`);
+        }
+        return { profiled, nodes: nodeRows };
+    } catch (err) {
+        log.error('Node profiling failed:', err.message);
+        return { profiled: 0, nodes: 0, error: err.message };
+    }
 }
 
 /**
@@ -975,9 +1738,8 @@ async function processAnalyticsQueue() {
     );
     const remaining = left.rows[0].n;
 
-    log.info(
-        `Error analytics: ${processed} extracted, ${failed} failed, ${remaining} still queued.`
-    );
+    step('analytics',
+        `${processed} extracted, ${failed} failed, ${remaining} still queued`);
     return { processed, failed, remaining };
 }
 
@@ -1175,6 +1937,11 @@ async function syncErrorAnalytics(errorIdsArray) {
             const { errorType, errorMessage, errorCategory } =
                 resolveError(rawMessage, rawType, errorStack, nodeType, httpCode);
 
+            // F-07. Computed here rather than derived at read time: the read
+            // path groups on it, and a GROUP BY over a normalisation function
+            // cannot use an index.
+            const fp = fingerprintOf(errorMessage, nodeType, errorType);
+
             const payload = {
                 id: row.exec_id,
                 workflow_id: row.workflow_id,
@@ -1191,6 +1958,7 @@ async function syncErrorAnalytics(errorIdsArray) {
                 execution_source: executionSource,
                 error_category: errorCategory,
                 http_code: httpCode,
+                fingerprint: fp.fingerprint,
                 started_at: startedStr
             };
 
@@ -1204,8 +1972,8 @@ async function syncErrorAnalytics(errorIdsArray) {
             // Insert into SQLite
             await localDb.execute(
                 `INSERT INTO execution_error_analytics
-                 (id, workflow_id, node_id, node_name, node_type, error_type, error_message, error_stack, source_node, source_output_index, input_data, metadata, execution_source, error_category, http_code, timestamp)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 (id, workflow_id, node_id, node_name, node_type, error_type, error_message, error_stack, source_node, source_output_index, input_data, metadata, execution_source, error_category, http_code, fingerprint, timestamp)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(id) DO UPDATE SET
                  node_id=excluded.node_id,
                  node_name=excluded.node_name,
@@ -1219,6 +1987,7 @@ async function syncErrorAnalytics(errorIdsArray) {
                  metadata=excluded.metadata,
                  execution_source=excluded.execution_source,
                  error_category=excluded.error_category,
+                 fingerprint=excluded.fingerprint,
                  http_code=COALESCE(excluded.http_code, execution_error_analytics.http_code)`,
                 [
                     row.exec_id,
@@ -1236,9 +2005,12 @@ async function syncErrorAnalytics(errorIdsArray) {
                     executionSource,
                     errorCategory,
                     httpCode,
+                    fp.fingerprint,
                     startedStr
                 ]
             );
+            await registerFingerprint(fp, errorMessage, nodeType, errorType, startedStr,
+                { reopenIfResolved: true });
             succeeded.push(row.exec_id);
         }
 
@@ -1277,7 +2049,10 @@ async function syncErrorAnalytics(errorIdsArray) {
         }
 
         await localDb.execute('COMMIT');
-        log.info(`Error Analytics updated for ${analyticsData.length} records.`);
+        // Not logged at info: processAnalyticsQueue reports the same pass as
+        // step 7 with the fuller count (extracted / failed / still queued), and
+        // two lines saying "45" invite the reader to add them up.
+        log.debug(`Error analytics chunk written: ${analyticsData.length} records.`);
 
         // Debug Export.
         //
@@ -1349,6 +2124,11 @@ function waitForIdle(timeoutMs = 8000) {
 }
 
 module.exports = {
+    // Exported so a test can assert that every step() call site has a number,
+    // which is the one way this numbering can rot: add a stage, forget the list,
+    // and the log quietly says "[9/13]" for two different things.
+    PASS_STEPS,
+    step,
     syncData,
     syncAuthorization,
     updateExecutionVolumeStats,
@@ -1356,6 +2136,10 @@ module.exports = {
     enqueueForAnalytics,
     processAnalyticsQueue,
     reclassifyIfNeeded,
+    syncWorkflowStatistics,
+    syncOrganisation,
+    backfillFingerprints,
+    profileWorkflowNodes,
     purgeExpiredErrorDetail,
     isSyncActive,
     waitForIdle

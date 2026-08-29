@@ -219,7 +219,9 @@ window.fetchConcurrencyDetails = async function(timestamp, windowSize = 5) {
     setTimeout(() => document.getElementById('detailsModalContainer').classList.remove('scale-95'), 10);
 
     try {
-        const response = await fetchWithAuth(`/api/analytics/execution-volume/details?time=${encodeURIComponent(timestamp)}&window=${windowSize}`);
+        const modeParam = window.currentMode && window.currentMode()
+            ? `&mode=${encodeURIComponent(window.currentMode())}` : '';
+        const response = await fetchWithAuth(`/api/analytics/execution-volume/details?time=${encodeURIComponent(timestamp)}&window=${windowSize}${modeParam}`);
         const data = await response.json();
 
         if (data.length === 0) {
@@ -281,33 +283,53 @@ window.closeDetailsModal = function() {
     }
 }
 
+/**
+ * The workflows a picker should offer (F-17).
+ *
+ * Archived ones are dropped unless the toggle is on. Their executions still
+ * count everywhere else — the charts and totals are built from the same rows
+ * they always were — but offering a workflow that was retired weeks ago as a
+ * filter is offering an empty result.
+ *
+ * A workflow already selected is never removed from its own dropdown, or
+ * toggling archived off while filtering by an archived workflow would silently
+ * reset the page to "All Workflows" while the chart underneath still showed one.
+ */
+window.visibleWorkflows = function(workflows, keepName) {
+    if (!workflows) return [];
+    return workflows.filter(wf =>
+        window.showArchived || !wf.is_archived || wf.workflow_name === keepName);
+}
+
+function fillWorkflowSelect(select, workflows, limit) {
+    if (!select) return;
+    const selected = select.value;
+    const list = window.visibleWorkflows(workflows, selected);
+    while (select.options.length > 1) select.remove(1);
+    (limit ? list.slice(0, limit) : list).forEach(wf => {
+        const option = document.createElement('option');
+        option.value = wf.workflow_name;
+        // Marked rather than hidden when it is the current selection, so the
+        // reason the list is short is visible in the list itself.
+        option.innerText = wf.is_archived ? `${wf.workflow_name} (archived)` : wf.workflow_name;
+        select.appendChild(option);
+    });
+    // Restore the selection if it survived the rebuild.
+    if (selected && [...select.options].some(o => o.value === selected)) select.value = selected;
+}
+
 window.populateDropdown = function(workflows) {
-    const select = document.getElementById('workflowFilter');
-    // Populate only if empty (contains only the "All Workflows" option)
-    if (select && select.options.length <= 1 && workflows) {
-        const top15 = workflows.slice(0, 15);
-        top15.forEach(wf => {
-            const option = document.createElement('option');
-            option.value = wf.workflow_name;
-            option.innerText = wf.workflow_name;
-            select.appendChild(option);
-        });
-    }
-    // Sync with executions filter dropdown if it exists
+    // Rebuilt on every refresh rather than only when empty. It used to be filled
+    // once, from whatever the first window happened to return, and never again —
+    // so changing the date range left a picker describing a range that was no
+    // longer on screen.
+    fillWorkflowSelect(document.getElementById('workflowFilter'), workflows, 15);
     populateExecWorkflowDropdown(workflows);
 }
 
 window.populateExecWorkflowDropdown = function(workflows) {
-    const select = document.getElementById('execWorkflowFilter');
-    if (!select || !workflows) return;
     // Always rebuild — select is recreated each time the tab renders
-    while (select.options.length > 1) select.remove(1);
-    workflows.forEach(wf => {
-        const option = document.createElement('option');
-        option.value = wf.workflow_name;
-        option.innerText = wf.workflow_name;
-        select.appendChild(option);
-    });
+    fillWorkflowSelect(document.getElementById('execWorkflowFilter'), workflows, null);
 }
 
 window.clearExecFilters = function() {

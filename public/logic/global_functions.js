@@ -102,7 +102,14 @@ window.settingsReady = window.initSettings();
 const DISPATCHABLE_ACTIONS = [
     'toggleChat', 'switchTab', 'applyPreset', 'setConcPreset', 'closeDetailsModal',
     'logout', 'forceDbSync', 'setErrorRange', 'closeWindow', 'loadRoiMetrics',
-    'copyErrorMessage', 'closeErrorModal', 'clearExecFilters', 'applyExecFilters'
+    'copyErrorMessage', 'closeErrorModal', 'clearExecFilters', 'applyExecFilters',
+    'setInsightsRange', 'toggleArchived',
+    // Alerts page (F-13 / F-14)
+    'newAlertRule', 'editAlertRule', 'deleteAlertRule', 'toggleAlertRule',
+    'newAlertChannel', 'editAlertChannel', 'deleteAlertChannel', 'toggleAlertChannel',
+    'testAlertChannel', 'runAlertsNow', 'closeAlertEditor', 'saveAlertEditor',
+    // Error lifecycle (F-15)
+    'setFingerprintStatus'
 ];
 
 window.closeWindow = function () { window.close(); };

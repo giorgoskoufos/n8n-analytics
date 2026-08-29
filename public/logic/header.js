@@ -49,6 +49,7 @@ async function initGlobalHeader() {
         // 6. Attach Listeners and Health Check
         setupMenuLogic();
         checkN8nHealth();
+        checkSyncLag();
         
         console.log("[HEADER] Global header initialized successfully");
         
@@ -63,7 +64,9 @@ function fixMenuPaths(isPages) {
     
     const links = {
         'nav-home': basePath + 'index.html',
+        'nav-insights': pagesPath + 'insights.html',
         'nav-errors': pagesPath + 'errors.html',
+        'nav-alerts': pagesPath + 'alerts.html',
         'nav-roi': pagesPath + 'roi.html',
         'nav-settings': pagesPath + 'settings.html'
     };
@@ -138,4 +141,71 @@ async function checkN8nHealth() {
     }
 }
 
+/**
+ * F-19 · How old is what you are looking at.
+ *
+ * Two separate ages, and they answer different questions: how long since the
+ * ETL last finished a pass, and how old the newest execution in the replica is.
+ * The pill shows the first, because that is the one that means "this page may be
+ * wrong"; the tooltip carries both, because a healthy pipeline over a quiet n8n
+ * looks identical from the outside and is not a problem to fix.
+ *
+ * Uses ?brief=1 — the full health payload counts half a million rows, and this
+ * runs on every page load of every page.
+ */
+async function checkSyncLag() {
+    const pill = document.getElementById('syncLagIndicator');
+    const text = document.getElementById('syncLagText');
+    if (!pill || !text) return;
+
+    const ago = (ms) => {
+        if (ms === null || ms === undefined) return 'unknown';
+        const s = Math.round(ms / 1000);
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.round(s / 60)}m`;
+        if (s < 86400) return `${(s / 3600).toFixed(1)}h`;
+        return `${(s / 86400).toFixed(1)}d`;
+    };
+
+    const paint = (tone, icon, label, title) => {
+        pill.className = 'hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full ' +
+            `bg-white/5 border text-[10px] uppercase tracking-widest font-bold ${tone}`;
+        pill.title = title;
+        pill.innerHTML = `<i class="fa-solid ${icon}"></i><span id="syncLagText">${label}</span>`;
+    };
+
+    try {
+        if (typeof window.fetchWithAuth !== 'function') return;
+        const res = await window.fetchWithAuth('/api/analytics/system?brief=1');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        const since = ago(d.pipeline.since_last_run_ms);
+        const dataAge = ago(d.data.data_age_ms);
+        const detail = `Last ETL pass ${since} ago (${d.pipeline.last_status || 'unknown'}). ` +
+            `Newest execution in the replica is ${dataAge} old.`;
+
+        if (d.pipeline.status === 'stalled') {
+            paint('border-rose-500/40 text-rose-300', 'fa-triangle-exclamation',
+                `Sync stalled · ${since}`, detail);
+        } else if (d.pipeline.status === 'late') {
+            paint('border-amber-500/40 text-amber-300', 'fa-hourglass-half',
+                `Sync late · ${since}`, detail);
+        } else if (d.pipeline.status === 'unknown') {
+            paint('border-white/10 text-gray-500', 'fa-circle-question', 'Never synced',
+                'No ETL pass has been recorded yet.');
+        } else {
+            paint('border-white/10 text-gray-400', 'fa-rotate', `Synced ${since} ago`, detail);
+        }
+    } catch (e) {
+        // A header widget must not be the loudest thing on a page it failed to
+        // describe. It says it does not know, and says nothing else.
+        paint('border-white/10 text-gray-600', 'fa-circle-question', 'Sync unknown',
+            'Could not read the dashboard health endpoint.');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', initGlobalHeader);
+
+// The page can sit open for hours. A "synced 2m ago" that was true when the tab
+// was opened this morning is worse than no indicator at all.
+setInterval(checkSyncLag, 60000);

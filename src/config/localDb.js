@@ -1,4 +1,5 @@
 const sqlite3 = require('sqlite3').verbose();
+const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('path');
 const fs = require('fs');
 const { MIGRATIONS } = require('./schema');
@@ -71,7 +72,7 @@ const localDb = new sqlite3.Database(dbPath, (err) => {
     // after the migrations arrived died on
     // "Safety level may not be changed inside a transaction": PRAGMA synchronous
     // had landed in the middle of a migration's BEGIN.
-    signalReady(applyPragmas().then(() => runMigrations(localDb)));
+    signalReady(applyPragmas().then(() => localDb.exclusive(() => runMigrations(localDb))));
 });
 
 localDb.ready = ready;
@@ -184,6 +185,51 @@ async function runMigrations(db) {
     log.info('Schema ready.');
 }
 
+// ==========================================================================
+// One writer at a time
+// ==========================================================================
+
+/**
+ * A transaction belongs to the CONNECTION, not to the function that opened it.
+ *
+ * This process has exactly one SQLite connection and three things on timers that
+ * write through it: the ETL pass, the fingerprint backfill and the alert pass.
+ * Each brackets its work in BEGIN/COMMIT. SQLite has no nested transactions, so
+ * the moment two of them overlap the second BEGIN fails with "cannot start a
+ * transaction within a transaction" — and it kills whichever pass was unlucky,
+ * not the one already running.
+ *
+ * That is not hypothetical. The ETL and the fingerprint backfill were scheduled
+ * on the same cron expression, so they fired in the same millisecond: eighteen
+ * consecutive failed passes, the replica nine hours behind, and nothing saying
+ * so. F-19's health panel is what finally showed it.
+ *
+ * So the gate lives here rather than in each caller. Work handed to exclusive()
+ * runs when no other exclusive() work is in flight, and the guard in execute()
+ * makes a caller who forgets say so loudly instead of failing at 3am.
+ *
+ * Reentrant, via AsyncLocalStorage: the ETL calls the fingerprint backfill as
+ * its last step, and a plain mutex would deadlock the moment it did.
+ */
+const writeGate = new AsyncLocalStorage();
+let gateTail = Promise.resolve();
+
+localDb.exclusive = function (fn) {
+    // Already inside the gate — this is one pass calling its own step, not a
+    // second writer.
+    if (writeGate.getStore()) return Promise.resolve().then(fn);
+
+    const run = () => writeGate.run({ held: true }, fn);
+    // Queued behind whatever holds it. The tail is normalised so one rejection
+    // cannot break the chain and strand every writer after it.
+    const queued = gateTail.then(run, run);
+    gateTail = queued.then(() => {}, () => {});
+    return queued;
+};
+
+/** Whether the caller currently owns the connection. Used by the tests. */
+localDb.holdsWriteGate = () => Boolean(writeGate.getStore());
+
 // Convert callback based queries to promises for easier async/await usage
 localDb.query = function (sql, params = []) {
     return new Promise((resolve, reject) => {
@@ -199,6 +245,17 @@ localDb.query = function (sql, params = []) {
 };
 
 localDb.execute = function (sql, params = []) {
+    // Only ever true for a bug, and cheap: the store lookup short-circuits
+    // before the regex. It logs rather than throws — a warning that is wrong
+    // must not be able to stop an ETL pass — but it names the exact mistake
+    // that produced a nine-hour outage here, at the moment it is made.
+    if (!writeGate.getStore() && /^\s*BEGIN\b/i.test(sql)) {
+        log.error(
+            'BEGIN TRANSACTION issued outside localDb.exclusive(). Two writers on ' +
+            'one connection collide with "cannot start a transaction within a ' +
+            'transaction". Wrap this pass in localDb.exclusive().'
+        );
+    }
     return new Promise((resolve, reject) => {
         this.run(sql, params, function (err) {
             if (err) {

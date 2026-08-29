@@ -64,6 +64,35 @@ function parseDateRange(startValue, endValue) {
     return { ok: true, start, end };
 }
 
+// --- Execution mode ---
+//
+// n8n's ExecutionMode union. Every endpoint that accepts a ?mode= filter
+// validates against this rather than binding the value straight into the query.
+// It is a bound parameter either way, so this is not about injection: an
+// unrecognised mode matches nothing, and an empty chart looks exactly like a
+// quiet day. A 400 says which of the two it is.
+const EXECUTION_MODES = [
+    'cli', 'error', 'evaluation', 'integrated', 'internal', 'manual', 'retry', 'trigger', 'webhook'
+];
+
+/**
+ * Validates an optional ?mode= filter.
+ *
+ * Absent is valid and means "every mode" — the filter is optional on every
+ * endpoint that takes it.
+ */
+function parseExecutionMode(value) {
+    if (value === undefined || value === null || value === '') return { ok: true, mode: null };
+    if (typeof value !== 'string' || !EXECUTION_MODES.includes(value)) {
+        return {
+            ok: false,
+            error: `Unknown execution mode "${String(value).slice(0, 32)}". ` +
+                `Allowed: ${EXECUTION_MODES.join(', ')}.`
+        };
+    }
+    return { ok: true, mode: value };
+}
+
 // --- Global dashboard settings ---
 //
 // POST /api/settings used to write any key with any value. The table is small
@@ -83,10 +112,28 @@ function isValidTimeZone(tz) {
     }
 }
 
+/**
+ * n8n's own concurrency ceiling, if the operator chooses to tell us.
+ *
+ * It lives in N8N_CONCURRENCY_PRODUCTION_LIMIT on a different process, so the
+ * dashboard cannot read it and will not pretend to. Given it, F-06 can say how
+ * much headroom is left; without it, it reports the peak and stops there.
+ * An empty string clears it — otherwise a limit set once could never be unset.
+ */
+function isValidConcurrencyLimit(v) {
+    if (v === '') return true;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 1 && n <= 10000;
+}
+
 const ALLOWED_SETTINGS = {
     timezone: {
         check: isValidTimeZone,
         hint: 'an IANA time zone name, for example Europe/Athens'
+    },
+    concurrency_limit: {
+        check: isValidConcurrencyLimit,
+        hint: 'a whole number of concurrent executions between 1 and 10000, or empty to clear'
     }
 };
 
@@ -149,7 +196,9 @@ function validateRoiEntry(entry) {
 module.exports = {
     parseIsoDate,
     parseDateRange,
+    parseExecutionMode,
     validateSetting,
     validateRoiEntry,
-    ALLOWED_SETTINGS
+    ALLOWED_SETTINGS,
+    EXECUTION_MODES
 };

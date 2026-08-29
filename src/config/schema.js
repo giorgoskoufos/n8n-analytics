@@ -449,7 +449,443 @@ const MIGRATIONS = [
             `CREATE INDEX IF NOT EXISTS idx_exec_backfill_pending ON execution_entity(id)
               WHERE mode IS NULL`
         ]
-    }
+    },
+
+    {
+        // F-07. Errors were grouped on (category, node_name, first 200 characters
+        // of the message), which makes "Column 'remedy_id' does not exist" and
+        // "Column 'receivedDateTime' does not exist" two unrelated problems.
+        // 14,267 errors became 1,524 groups; fingerprinting the same rows gives
+        // 98. A list of 1,524 is not a list anyone reads.
+        //
+        // Split from its indexes below for the same reason 009 and 010 are split:
+        // the runner applies a migration's `sql` before its `columns`, so an
+        // index naming a column added in the same migration would run first and
+        // fail.
+        id: '011-error-fingerprints',
+        columns: [
+            ['execution_error_analytics', 'fingerprint', 'TEXT']
+        ],
+        sql: [
+            // What a fingerprint is, and what a human has decided about it.
+            //
+            // Deliberately holds no counts. first_seen/last_seen/total_count were
+            // in the original plan, and storing them would mean two sources of
+            // truth for the same number — the drift this codebase has already
+            // been bitten by twice. Everything countable is derived from
+            // execution_error_analytics at read time, which is one indexed GROUP
+            // BY over a table of fourteen thousand rows.
+            //
+            // first_seen is the exception and is stored: it is a watermark. Once
+            // an analytics row ages out, the date a problem first appeared cannot
+            // be recovered from anything, and "has this ever been seen before" is
+            // precisely the question F-13 alerts on.
+            `CREATE TABLE IF NOT EXISTS error_fingerprints (
+                fingerprint TEXT PRIMARY KEY,
+                normalized_message TEXT NOT NULL,
+                -- One real message, kept verbatim for display. The normalised
+                -- form is the identity; it is not what anyone wants to read.
+                sample_message TEXT,
+                node_type TEXT,
+                error_type TEXT,
+                first_seen DATETIME NOT NULL,
+                -- Lifecycle (F-15 drives it; the column exists now so the
+                -- fingerprint has somewhere to carry a decision from the start).
+                status TEXT NOT NULL DEFAULT 'open',
+                notes TEXT,
+                status_by TEXT,
+                status_at DATETIME,
+                -- Which ruleset produced this fingerprint, so a change to the
+                -- normaliser can be detected and the affected rows recomputed
+                -- rather than silently splitting every historical group.
+                version INTEGER NOT NULL DEFAULT 1
+            )`
+        ]
+    },
+
+    {
+        id: '012-fingerprint-indexes',
+        sql: [
+            // Every grouped read starts here: given a fingerprint, its errors in
+            // a time range.
+            'CREATE INDEX IF NOT EXISTS idx_err_fingerprint ON execution_error_analytics(fingerprint, timestamp)',
+            // Scaffolding for the one-time backfill, dropped by the pass that
+            // finishes it — the same arrangement as idx_exec_backfill_pending.
+            `CREATE INDEX IF NOT EXISTS idx_err_fp_pending ON execution_error_analytics(id)
+              WHERE fingerprint IS NULL`
+        ]
+    },
+
+    {
+        // F-09. n8n keeps its own tally of what each workflow last did, in
+        // workflow_statistics: one row per (workflow, event type) with a count
+        // and the timestamp of the most recent one.
+        //
+        // Worth mirroring because it is the one source that survives pruning. An
+        // execution row can be deleted; this counter is not, so a workflow whose
+        // entire history has aged out still says when it last succeeded. That
+        // makes it the second opinion the silent-death detector needs — the
+        // detector's whole failure mode is mistaking "no rows here" for "it
+        // stopped running".
+        id: '013-workflow-statistics',
+        sql: [
+            `CREATE TABLE IF NOT EXISTS workflow_statistics (
+                workflow_id TEXT NOT NULL,
+                -- n8n's event name: production_success, production_error,
+                -- manual_success, manual_error, data_loaded.
+                name TEXT NOT NULL,
+                count INTEGER,
+                latest_event DATETIME,
+                PRIMARY KEY (workflow_id, name)
+            )`
+        ]
+    },
+
+    {
+        // The organisational and dependency graph n8n already maintains and this
+        // dashboard ignored: folders with real hierarchy, tags, the version
+        // history behind every workflow, and what each version depends on.
+        //
+        // Every one of these is small — the largest is 2,568 rows — and every one
+        // answers a question the dashboard could not: which folder is costing us
+        // (F-16), which workflows share the credential that just expired (F-10),
+        // which deploy the errors started at (F-11), whose order this execution
+        // was for (F-18).
+        id: '014-organisation-and-dependencies',
+        sql: [
+            // F-16.
+            `CREATE TABLE IF NOT EXISTS folder (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                parent_folder_id TEXT,
+                project_id TEXT,
+                created_at DATETIME,
+                updated_at DATETIME
+            )`,
+            `CREATE TABLE IF NOT EXISTS tag_entity (
+                id TEXT PRIMARY KEY,
+                name TEXT
+            )`,
+            `CREATE TABLE IF NOT EXISTS workflows_tags (
+                workflow_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                PRIMARY KEY (workflow_id, tag_id)
+            )`,
+
+            // F-11. Metadata only — the `nodes` and `connections` columns are the
+            // entire workflow definition as JSON, and mirroring those would turn
+            // a metadata replica into a copy of the customer's intellectual
+            // property for no gain: nothing here renders a workflow.
+            `CREATE TABLE IF NOT EXISTS workflow_history (
+                version_id TEXT PRIMARY KEY,
+                workflow_id TEXT,
+                authors TEXT,
+                name TEXT,
+                autosaved BOOLEAN,
+                created_at DATETIME
+            )`,
+
+            // F-10. One row per (workflow version, thing it depends on):
+            // nodeType, credentialId, webhookPath, workflowCall, errorWorkflow.
+            // `dependency_info` carries n8n's node id and version; the credential
+            // *contents* are nowhere near this table.
+            `CREATE TABLE IF NOT EXISTS workflow_dependency (
+                id INTEGER PRIMARY KEY,
+                workflow_id TEXT,
+                workflow_version_id INTEGER,
+                published_version_id TEXT,
+                dependency_type TEXT,
+                dependency_key TEXT,
+                node_id TEXT,
+                created_at DATETIME
+            )`,
+
+            // F-10's other half: what a credential id refers to.
+            //
+            // `data` is DELIBERATELY absent and must stay absent. It is the
+            // encrypted credential blob — the single most sensitive column in
+            // n8n's schema — and the dashboard has no use for it whatsoever. The
+            // name and the type are what make "the token that just expired is
+            // used by eleven other workflows" sayable.
+            `CREATE TABLE IF NOT EXISTS credentials_entity (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                type TEXT,
+                is_managed BOOLEAN,
+                created_at DATETIME,
+                updated_at DATETIME
+            )`,
+
+            // F-18. Business-level key/value written by the workflows themselves.
+            //
+            // The value column needs care. It is free-form text the workflow
+            // author chose, and on this instance it already holds a whole
+            // AI-agent reply describing the infrastructure — so "business
+            // metadata" is not automatically the harmless order-id it sounds
+            // like. n8n's own application layer caps these at 512 characters
+            // (the Postgres column is unbounded text; the longest here is
+            // exactly 512), and the mirror applies the same bound rather than
+            // relying on that staying true. Mirroring values can also be turned
+            // off entirely; keys are always kept, because they describe what a
+            // workflow records rather than what it recorded.
+            `CREATE TABLE IF NOT EXISTS execution_metadata (
+                id INTEGER PRIMARY KEY,
+                execution_id INTEGER,
+                key TEXT,
+                value TEXT,
+                -- Whether the stored value was cut short, so a filter matching on
+                -- it can say why it might not match.
+                truncated BOOLEAN DEFAULT 0
+            )`
+        ]
+    },
+
+    {
+        id: '015-organisation-indexes',
+        sql: [
+            'CREATE INDEX IF NOT EXISTS idx_folder_parent ON folder(parent_folder_id)',
+            'CREATE INDEX IF NOT EXISTS idx_wf_tags_tag ON workflows_tags(tag_id)',
+            // F-11 reads history newest-first per workflow to place deploy markers.
+            'CREATE INDEX IF NOT EXISTS idx_history_wf_created ON workflow_history(workflow_id, created_at)',
+            // F-10 is read in both directions: what does this workflow use, and
+            // who else uses this thing. Both need their own index.
+            'CREATE INDEX IF NOT EXISTS idx_dep_workflow ON workflow_dependency(workflow_id, dependency_type)',
+            'CREATE INDEX IF NOT EXISTS idx_dep_key ON workflow_dependency(dependency_type, dependency_key)',
+            // F-18 filters executions by a metadata key/value pair.
+            'CREATE INDEX IF NOT EXISTS idx_meta_key_value ON execution_metadata(key, value)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_execution ON execution_metadata(execution_id)'
+        ]
+    },
+
+    {
+        // F-13 / F-14 / F-15. The dashboard becomes something that tells you,
+        // rather than something you remember to look at.
+        //
+        // Three tables and they do different jobs on purpose: a rule is a
+        // standing question, a channel is where an answer goes, an event is one
+        // answer that was actually delivered. Folding delivery into the rule
+        // would make "who was told" unanswerable after the fact, which is the
+        // first thing anyone asks when an alert did not arrive.
+        id: '016-alerting',
+        sql: [
+            // Where an alert goes. `config` is JSON whose shape depends on type.
+            //
+            // It can hold a secret — a Telegram bot token, a webhook URL with a
+            // signing key in it — so nothing in the API ever returns it verbatim;
+            // the controller redacts on the way out. Storing it here is the same
+            // trade the replica already makes for the Postgres password: the
+            // process needs it to do its job, and the file is as protected as the
+            // rest of the deployment.
+            `CREATE TABLE IF NOT EXISTS alert_channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                -- webhook | n8n_workflow | telegram
+                type TEXT NOT NULL,
+                config TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                -- Result of the last delivery attempt through this channel, so a
+                -- channel that has been quietly failing is visible without
+                -- reading through the event log.
+                last_ok_at DATETIME,
+                last_error TEXT,
+                last_error_at DATETIME
+            )`,
+
+            // A standing question, asked of every ETL cycle.
+            //
+            // The condition columns are deliberately generic rather than one
+            // table per rule type: every type here reduces to "a number, measured
+            // over a window, compared with a threshold, on a subject". Seven
+            // near-identical tables would be seven places to forget the cooldown.
+            `CREATE TABLE IF NOT EXISTS alert_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                -- new_fingerprint | error_rate | silent_death | queue_lag |
+                -- volume_drop | payload_spike | db_growth
+                type TEXT NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT 1,
+
+                -- What it watches. All null means the whole instance.
+                workflow_id TEXT,
+                folder_id TEXT,
+                tag_id TEXT,
+
+                -- When it fires. Meaning depends on the type; the validator
+                -- documents each one and refuses a value that makes no sense for
+                -- it.
+                threshold REAL,
+                window_minutes INTEGER NOT NULL DEFAULT 60,
+                -- The guard that keeps a rule from firing on three executions.
+                -- One failure out of two is a 50% error rate and is not news.
+                min_executions INTEGER NOT NULL DEFAULT 20,
+
+                channel_id INTEGER,
+                -- One alert per subject per this many minutes. Without it, a
+                -- workflow failing every minute produces an alert every minute,
+                -- and the third one is already being ignored.
+                cooldown_minutes INTEGER NOT NULL DEFAULT 60,
+
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                created_by TEXT,
+                FOREIGN KEY (channel_id) REFERENCES alert_channels (id) ON DELETE SET NULL
+            )`,
+
+            // One firing. Kept whether or not delivery succeeded, and kept when
+            // it was suppressed by the cooldown too — "why did I not get told"
+            // is a question this table has to be able to answer.
+            `CREATE TABLE IF NOT EXISTS alert_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER,
+                rule_name TEXT,
+                fired_at DATETIME NOT NULL,
+                -- rule + subject. The cooldown is enforced on this, so two
+                -- workflows breaching the same rule alert independently while one
+                -- workflow breaching it repeatedly does not.
+                dedupe_key TEXT NOT NULL,
+                subject TEXT,
+                subject_label TEXT,
+                title TEXT NOT NULL,
+                body TEXT,
+                -- The numbers behind the sentence, as JSON, so an alert can be
+                -- explained later without re-running the query that produced it.
+                payload TEXT,
+                -- pending | sent | failed | suppressed | no_channel
+                delivery_status TEXT NOT NULL,
+                delivery_error TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (rule_id) REFERENCES alert_rules (id) ON DELETE SET NULL
+            )`,
+
+            // F-15. What a person decided about a fingerprint, and when.
+            //
+            // The decision itself lives on error_fingerprints (status, notes);
+            // this is the audit trail behind it. Separate because a status is a
+            // current value and a history is a list, and squashing the two loses
+            // the answer to "who resolved this, and did it come back".
+            `CREATE TABLE IF NOT EXISTS fingerprint_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fingerprint TEXT NOT NULL,
+                at DATETIME NOT NULL,
+                -- acknowledged | resolved | ignored | reopened | commented
+                action TEXT NOT NULL,
+                actor TEXT,
+                note TEXT
+            )`
+        ]
+    },
+
+    {
+        id: '017-alerting-indexes',
+        sql: [
+            // The cooldown check runs once per candidate alert per cycle: given a
+            // dedupe key, when did it last fire.
+            'CREATE INDEX IF NOT EXISTS idx_alert_events_key ON alert_events(dedupe_key, fired_at)',
+            // The feed is read newest-first and pruned oldest-first.
+            'CREATE INDEX IF NOT EXISTS idx_alert_events_fired ON alert_events(fired_at)',
+            // Only enabled rules are ever evaluated.
+            'CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled, type)',
+            'CREATE INDEX IF NOT EXISTS idx_fp_events ON fingerprint_events(fingerprint, at)'
+        ]
+    },
+
+    {
+        // F-12. Where a workflow spends its time, node by node.
+        //
+        // A SAMPLE, and the schema says so: `samples` is how many executions
+        // this row was built from, and every number beside it is a total over
+        // exactly those. The alternative — accumulating forever — produces a
+        // figure that describes a workflow's whole history including the
+        // version that was fixed last month, and nobody could tell.
+        //
+        // Rows are replaced per workflow rather than updated, so the profile is
+        // always "the last N executions", never a blend of two eras.
+        id: '018-node-profile',
+        sql: [
+            `CREATE TABLE IF NOT EXISTS workflow_node_profile (
+                workflow_id TEXT NOT NULL,
+                node_name TEXT NOT NULL,
+                -- Executions in the sample that ran this node at all. A node
+                -- behind an IF appears in fewer than the workflow's sample size,
+                -- and averaging over the wrong denominator would make it look
+                -- cheap.
+                samples INTEGER NOT NULL,
+                runs INTEGER NOT NULL,
+                total_ms INTEGER NOT NULL,
+                max_ms INTEGER NOT NULL,
+                -- Null when the node never writes to the main output — an AI
+                -- chat model, a memory, a tool. Not zero: it did not produce
+                -- nothing, it does not produce items.
+                items_out INTEGER,
+                failed_runs INTEGER NOT NULL DEFAULT 0,
+                is_sub_node BOOLEAN NOT NULL DEFAULT 0,
+                node_type TEXT,
+                PRIMARY KEY (workflow_id, node_name)
+            )`,
+
+            // When each workflow was last profiled and against what. Separate
+            // from the rows because it must survive a workflow whose sample
+            // produced no readable trace — otherwise the sampler retries it
+            // every cycle forever.
+            `CREATE TABLE IF NOT EXISTS workflow_profile_state (
+                workflow_id TEXT PRIMARY KEY,
+                sampled_at DATETIME NOT NULL,
+                executions_sampled INTEGER NOT NULL,
+                executions_unreadable INTEGER NOT NULL DEFAULT 0,
+                newest_execution_id INTEGER,
+                total_node_ms INTEGER,
+                total_wall_ms INTEGER
+            )`
+        ]
+    },
+
+    {
+        id: '019-node-profile-indexes',
+        sql: [
+            // The "slowest nodes anywhere" ranking reads this the other way
+            // round from the primary key.
+            'CREATE INDEX IF NOT EXISTS idx_node_profile_ms ON workflow_node_profile(total_ms DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_profile_state_sampled ON workflow_profile_state(sampled_at)'
+        ]
+    },
+
+    {
+        // F-12. How many items cross each edge of a workflow.
+        //
+        // Deliberately NOT called data loss. Measured over 400 real executions,
+        // 5 of 16 edges change the item count and the biggest by far —
+        // 5,763 items in, 122 out — is a rollup node doing exactly its job. A
+        // panel that flagged that as loss would be wrong on its loudest row,
+        // and nobody would trust the quiet ones.
+        //
+        // What is stored is the ratio's ingredients. The reading a person can
+        // act on is a ratio that CHANGED, and that needs the number recorded
+        // per sample before it can ever be compared with itself.
+        id: '020-edge-profile',
+        sql: [
+            `CREATE TABLE IF NOT EXISTS workflow_edge_profile (
+                workflow_id TEXT NOT NULL,
+                from_node TEXT NOT NULL,
+                to_node TEXT NOT NULL,
+                samples INTEGER NOT NULL,
+                runs INTEGER NOT NULL,
+                items_in INTEGER NOT NULL,
+                items_out INTEGER NOT NULL,
+                PRIMARY KEY (workflow_id, from_node, to_node)
+            )`,
+
+            // In this migration and not in 019, which has already been applied
+            // on every database that has run today's code. The runner records a
+            // migration by id: adding a statement to one that is already
+            // recorded means it never executes anywhere it matters, and the
+            // index quietly exists only on a database created from scratch
+            // afterwards.
+            'CREATE INDEX IF NOT EXISTS idx_edge_profile_wf ON workflow_edge_profile(workflow_id)'
+        ]
+    },
+
 ];
 
 // Indexes that exist to serve a one-time migration and are dropped by the code
@@ -457,7 +893,22 @@ const MIGRATIONS = [
 // — but not in the permanent set below, or the offline optimiser would helpfully
 // rebuild the scaffolding on every run and then report the schema as incomplete
 // for the rest of the database's life.
-const TRANSIENT_INDEXES = new Set(['idx_exec_backfill_pending']);
+//
+// Named individually rather than kept as a bare list, because each belongs to a
+// different backfill and they finish at different times. The first version of
+// this was a Set that the F-01 backfill iterated and dropped in full on
+// completion — which was correct while it was the only entry, and became a bug
+// the moment a second backfill needed scaffolding of its own: the earlier pass
+// would have demolished the later one's index before it was ever used.
+const TRANSIENT_INDEXES = {
+    // F-01: walks execution_entity in id order looking for rows the mirror has
+    // not reached.
+    mirrorBackfill: 'idx_exec_backfill_pending',
+    // F-07: the same walk over execution_error_analytics for fingerprints.
+    fingerprintBackfill: 'idx_err_fp_pending'
+};
+
+const TRANSIENT_INDEX_NAMES = new Set(Object.values(TRANSIENT_INDEXES));
 
 /**
  * Every CREATE INDEX the schema expects to find in a healthy replica.
@@ -469,7 +920,7 @@ const TRANSIENT_INDEXES = new Set(['idx_exec_backfill_pending']);
  */
 const INDEX_STATEMENTS = MIGRATIONS
     .flatMap((m) => (m.sql || []).filter((s) => /^\s*CREATE\s+(UNIQUE\s+)?INDEX/i.test(s)))
-    .filter((s) => !TRANSIENT_INDEXES.has(s.match(/idx_\w+/)[0]));
+    .filter((s) => !TRANSIENT_INDEX_NAMES.has(s.match(/idx_\w+/)[0]));
 
 /**
  * The mirrored columns this source actually has, plus the SQL fragments that
@@ -525,6 +976,7 @@ module.exports = {
     MIGRATIONS,
     INDEX_STATEMENTS,
     TRANSIENT_INDEXES,
+    TRANSIENT_INDEX_NAMES,
     EXECUTION_MIRROR_COLUMNS,
     WORKFLOW_MIRROR_COLUMNS,
     mirrorPlan,

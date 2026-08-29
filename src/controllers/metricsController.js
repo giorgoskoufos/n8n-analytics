@@ -1,8 +1,11 @@
 const { pool } = require('../config/db');
 const localDb = require('../config/localDb');
 const { parse } = require('flatted');
-const { parseIsoDate, parseDateRange, validateSetting, validateRoiEntry } = require('../utils/validate');
+const { parseIsoDate, parseDateRange, parseExecutionMode, validateSetting, validateRoiEntry } =
+    require('../utils/validate');
 const { scopeClause, canSeeWorkflow, filterVisibleWorkflows } = require('../utils/scope');
+const { groupingClause } = require('../utils/grouping');
+const { summariseTrace } = require('../utils/trace');
 const log = require('../utils/logger').logger('API');
 
 /**
@@ -11,6 +14,29 @@ const log = require('../utils/logger').logger('API');
  * indexed column stays untouched on the left of the comparison.
  * Always UTC, matching how every timestamp is written by the sync.
  */
+/**
+ * Authorization and the caller's own folder/tag/project filter, merged (F-16).
+ *
+ * The two are different things and must never be swapped: scope is what a user
+ * may see, grouping is what they asked to see. Combining them in one helper is
+ * what stops a call site from applying the filter and dropping the permission
+ * check — a bug that would look exactly like a working feature.
+ *
+ * Scope always comes first, so a grouping filter can only narrow further.
+ */
+function restrict(req, column) {
+    const scope = scopeClause(req.scope, column);
+    const grouping = groupingClause(req.query, column);
+    if (!grouping.ok) return grouping;
+    return {
+        ok: true,
+        sql: scope.sql + grouping.sql,
+        params: [...scope.params, ...grouping.params],
+        condition: scope.condition,
+        grouped: grouping.active
+    };
+}
+
 const isoDaysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
 const isoHoursAgo = (hours) => new Date(Date.now() - hours * 3600000).toISOString();
 
@@ -20,6 +46,12 @@ exports.getMetrics = async (req, res) => {
 
         const range = parseDateRange(req.query.startDate, req.query.endDate);
         if (!range.ok) return res.status(400).json({ error: range.error });
+
+        // F-02. Every figure on the dashboard can now be narrowed to one trigger
+        // type, because a webhook failure and a schedule failure are different
+        // problems and the combined rate describes neither of them.
+        const mode = parseExecutionMode(req.query.mode);
+        if (!mode.ok) return res.status(400).json({ error: mode.error });
 
         let startIso, endIso, prevStartIso, prevEndIso;
         const isCustom = true;
@@ -62,14 +94,22 @@ exports.getMetrics = async (req, res) => {
         const wfJoinClause = targetWorkflow ? 'JOIN workflow_entity w ON e."workflowId" = w.id' : '';
         const wfParam = targetWorkflow ? [targetWorkflow] : [];
 
-        // Appended last in every WHERE below, so its parameter is always last too.
-        const scope = scopeClause(req.scope, 'e."workflowId"');
+        // Rows without a mode are rows the backfill could not reach, so a mode
+        // filter necessarily excludes them. That is correct — they are not
+        // "mode X" — and it is also why the filter is opt-in rather than a
+        // default: unfiltered, the dashboard still counts every execution.
+        const modeFilterClause = mode.mode ? 'AND e.mode = ?' : '';
+        const modeParam = mode.mode ? [mode.mode] : [];
+
+        // Appended last in every WHERE below, so its parameters are always last too.
+        const scope = restrict(req, 'e."workflowId"');
+        if (!scope.ok) return res.status(400).json({ error: scope.error });
 
         // Order matters: the date bounds appear in the WHERE clause before the
-        // optional workflow filter that wfFilterClause appends after them, and
-        // the scope filter after that.
-        const currentParams = [startIso, endIso, ...wfParam, ...scope.params];
-        const prevParams = [prevStartIso, prevEndIso, ...wfParam, ...scope.params];
+        // optional workflow filter that wfFilterClause appends after them, then
+        // the mode filter, and the scope filter last.
+        const currentParams = [startIso, endIso, ...wfParam, ...modeParam, ...scope.params];
+        const prevParams = [prevStartIso, prevEndIso, ...wfParam, ...modeParam, ...scope.params];
 
         const statsQuery = `
             SELECT COUNT(*) as total,
@@ -78,7 +118,7 @@ exports.getMetrics = async (req, res) => {
             FROM execution_entity e
             ${wfJoinClause}
             WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-            ${wfFilterClause}${scope.sql};
+            ${wfFilterClause} ${modeFilterClause}${scope.sql};
         `;
 
         const prevStatsQuery = `
@@ -87,16 +127,18 @@ exports.getMetrics = async (req, res) => {
             FROM execution_entity e
             ${wfJoinClause}
             WHERE e."startedAt" >= ? AND e."startedAt" < ?
-            ${wfFilterClause}${scope.sql};
+            ${wfFilterClause} ${modeFilterClause}${scope.sql};
         `;
 
         const topWorkflowsQuery = `
-            SELECT w.name AS workflow_name, COUNT(e.id) AS execution_count,
+            SELECT w.name AS workflow_name, w.id AS workflow_id,
+                   w."isArchived" AS is_archived,
+                   COUNT(e.id) AS execution_count,
                    ROUND((COUNT(e.id) * 100.0 / NULLIF(SUM(COUNT(e.id)) OVER (), 0)), 2) AS percentage
             FROM execution_entity e
             JOIN workflow_entity w ON e."workflowId" = w.id
             WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-            ${wfFilterClause}${scope.sql}
+            ${wfFilterClause} ${modeFilterClause}${scope.sql}
             GROUP BY w.id, w.name
             ORDER BY execution_count DESC;
         `;
@@ -125,7 +167,7 @@ exports.getMetrics = async (req, res) => {
             FROM execution_entity e
             ${wfJoinClause}
             WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-            ${wfFilterClause}${scope.sql}
+            ${wfFilterClause} ${modeFilterClause}${scope.sql}
             GROUP BY bucket_idx
         `;
 
@@ -133,7 +175,8 @@ exports.getMetrics = async (req, res) => {
             localDb.query(statsQuery, currentParams),
             localDb.query(prevStatsQuery, prevParams),
             localDb.query(bucketQuery, [
-                startPoint.toISOString(), stepMs / 1000, startIso, endIso, ...wfParam, ...scope.params
+                startPoint.toISOString(), stepMs / 1000, startIso, endIso,
+                ...wfParam, ...modeParam, ...scope.params
             ]),
             localDb.query(topWorkflowsQuery, currentParams)
         ]);
@@ -220,6 +263,9 @@ exports.getExecutions = async (req, res) => {
         return res.status(400).json({ error: 'Invalid status filter.' });
     }
 
+    const mode = parseExecutionMode(req.query.mode);
+    if (!mode.ok) return res.status(400).json({ error: mode.error });
+
     const conditions = [
         'e."startedAt" IS NOT NULL',
         'e."stoppedAt" IS NOT NULL'
@@ -250,12 +296,21 @@ exports.getExecutions = async (req, res) => {
         conditions.push('(julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400 >= ?');
         params.push(parseFloat(minDuration));
     }
+    if (mode.mode) {
+        conditions.push('e.mode = ?');
+        params.push(mode.mode);
+    }
 
     // Last condition, so its parameter sits after every filter above and before
     // the LIMIT/OFFSET pair appended at execution time.
-    const scope = scopeClause(req.scope, 'e."workflowId"');
-    if (scope.condition) {
-        conditions.push(scope.condition);
+    // Authorization plus the caller's folder/tag/project filter. Pushed as raw
+    // conditions here because this endpoint builds its WHERE from a list.
+    const scope = restrict(req, 'e."workflowId"');
+    if (!scope.ok) return res.status(400).json({ error: scope.error });
+    if (scope.sql) {
+        // ' AND a AND b' -> ['a', 'b'] would be fragile; the fragment is appended
+        // whole instead, which is exactly how every other query here uses it.
+        conditions.push(scope.sql.replace(/^ AND /, ''));
         params.push(...scope.params);
     }
 
@@ -263,8 +318,12 @@ exports.getExecutions = async (req, res) => {
 
     try {
         const query = `
-            SELECT w.name, e.status, e."startedAt", e."stoppedAt", e.id as exec_id,
-                   (julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400 as duration
+            SELECT w.name, w."isArchived" AS is_archived,
+                   e.status, e."startedAt", e."stoppedAt", e.id as exec_id, e.mode,
+                   (julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400 as duration,
+                   CASE WHEN e."createdAt" IS NULL THEN NULL
+                        ELSE (julianday(e."startedAt") - julianday(e."createdAt")) * 86400000.0
+                   END AS queue_lag_ms
             FROM execution_entity e
             JOIN workflow_entity w ON e."workflowId" = w.id
             ${whereClause}
@@ -283,7 +342,7 @@ exports.getSlowest = async (req, res) => {
     try {
         const scope = scopeClause(req.scope, 'e."workflowId"');
         const query = `
-            SELECT w.name, 
+            SELECT w.name, w."isArchived" AS is_archived,
                    AVG((julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400) as avg_duration,
                    COUNT(e.id) as total_runs
             FROM execution_entity e
@@ -306,7 +365,7 @@ exports.getErrors = async (req, res) => {
     try {
         const scope = scopeClause(req.scope, 'e."workflowId"');
         const query = `
-            SELECT w.name, 
+            SELECT w.name, w."isArchived" AS is_archived,
                    SUM(CASE WHEN e.status = 'error' THEN 1 ELSE 0 END) as error_count,
                    COUNT(e.id) as total_runs
             FROM execution_entity e
@@ -392,6 +451,90 @@ exports.getExecutionError = async (req, res) => {
     } catch (err) {
         log.error('Parsing Error:', err);
         res.status(500).json({ error: 'Failed to parse error data' });
+    }
+};
+
+/**
+ * F-12 · GET /api/executions/:id/trace
+ *
+ * Where one execution actually spent its time, node by node, and how many items
+ * crossed each edge.
+ *
+ * Read from Postgres on demand rather than mirrored. The trace is the biggest
+ * object n8n stores — 33 KB on average here and 284 KB at the top end — and it
+ * is only interesting for the execution someone is currently looking at. This
+ * is the third and last of the three places this codebase touches Postgres, and
+ * it is the same one the Inspect button already used.
+ *
+ * What comes back is arithmetic, never payload: durations, item counts and node
+ * names. The existing `?full=true` on the error endpoint returns the raw object;
+ * this one cannot, by construction — summariseTrace does not copy values out.
+ */
+exports.getExecutionTrace = async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: 'Invalid execution id' });
+    }
+
+    try {
+        const result = await pool.query(
+            `SELECT d.data, e."workflowId" AS workflow_id, w.name AS workflow_name,
+                    e.status, e."startedAt" AS started_at, e."stoppedAt" AS stopped_at
+               FROM execution_data d
+               JOIN execution_entity e ON d."executionId" = e.id
+               LEFT JOIN workflow_entity w ON w.id = e."workflowId"
+              WHERE d."executionId" = $1`,
+            [id]
+        );
+
+        if (result.rows.length === 0) return res.status(404).json({ error: 'No data found' });
+        const row = result.rows[0];
+
+        // Addressed by execution id, so nothing above narrowed it to this user's
+        // workflows. 404 rather than 403, matching the error endpoint: whether
+        // an execution exists is itself not their business.
+        if (!(await canSeeWorkflow(req.scope, row.workflow_id))) {
+            log.warn(
+                `User ${req.user && req.user.id} was refused the trace of execution ` +
+                `${id} (workflow ${row.workflow_id}).`
+            );
+            return res.status(404).json({ error: 'No data found' });
+        }
+
+        const wallMs = row.started_at && row.stopped_at
+            ? new Date(row.stopped_at).getTime() - new Date(row.started_at).getTime()
+            : null;
+
+        let summary;
+        try {
+            summary = summariseTrace(parse(row.data), wallMs);
+        } catch (err) {
+            // A payload this process cannot parse is a fact about that
+            // execution, not a server fault. 200 with the reason beats 500 with
+            // a stack trace in the log and nothing on screen.
+            log.warn(`Execution ${id} trace could not be parsed:`, err.message);
+            return res.json({
+                execution_id: id, workflow_id: row.workflow_id,
+                workflow_name: row.workflow_name, status: row.status,
+                unreadable: true, reason: 'The stored trace could not be decoded.'
+            });
+        }
+
+        res.json({
+            execution_id: id,
+            workflow_id: row.workflow_id,
+            workflow_name: row.workflow_name,
+            status: row.status,
+            started_at: row.started_at,
+            n8n_url: process.env.N8N_EDITOR_BASE_URL
+                ? `${process.env.N8N_EDITOR_BASE_URL.replace(/\/+$/, '')}` +
+                  `/workflow/${encodeURIComponent(row.workflow_id)}/executions/${id}`
+                : null,
+            ...summary
+        });
+    } catch (err) {
+        log.error('Trace fetch failed:', err);
+        res.status(500).json({ error: 'Failed to read the execution trace' });
     }
 };
 
@@ -619,19 +762,21 @@ exports.getRoiMetrics = async (req, res) => {
  * as zero rather than omitted — a sparse result would let the chart close the
  * gaps and draw a quiet night as a straight line between two busy hours.
  */
-async function volumeSeries(scope, originMs, buckets = 288) {
+async function volumeSeries(scope, originMs, buckets = 288, mode = null) {
     const STEP_MS = 5 * 60 * 1000;
     const originIso = new Date(originMs).toISOString();
     const endIso = new Date(originMs + buckets * STEP_MS).toISOString();
     const scoped = scope || { sql: '', params: [] };
+    const modeSql = mode ? ' AND mode = ?' : '';
+    const modeParams = mode ? [mode] : [];
 
     const rows = await localDb.query(
         `SELECT CAST((julianday("startedAt") - julianday(?)) * 86400.0 / 300 AS INTEGER) AS bucket_idx,
                 COUNT(*) AS started_count
            FROM execution_entity
-          WHERE "startedAt" >= ? AND "startedAt" < ?${scoped.sql}
+          WHERE "startedAt" >= ? AND "startedAt" < ?${modeSql}${scoped.sql}
           GROUP BY bucket_idx`,
-        [originIso, originIso, endIso, ...scoped.params]
+        [originIso, originIso, endIso, ...modeParams, ...scoped.params]
     );
 
     const byIndex = new Map(rows.rows.map(r => [r.bucket_idx, r.started_count]));
@@ -651,6 +796,9 @@ exports.getExecutionVolume = async (req, res) => {
         const STEP_MS = 5 * 60 * 1000;
         const scope = scopeClause(req.scope, '"workflowId"');
 
+        const mode = parseExecutionMode(req.query.mode);
+        if (!mode.ok) return res.status(400).json({ error: mode.error });
+
         // Default: the rolling 24 hours.
         if (!start || !end) {
             // execution_volume_stats is a single instance-wide series written by
@@ -658,9 +806,15 @@ exports.getExecutionVolume = async (req, res) => {
             // a scoped user the global counts would leak the shape of every other
             // project's traffic. For them the same buckets are computed live; it
             // is one indexed range scan over their own workflows.
-            if (scope.condition) {
+            //
+            // A mode filter takes the same live path, and for a related reason:
+            // the cached series counts every execution regardless of how it was
+            // triggered, so serving it for ?mode=webhook would answer a
+            // different question than the one asked — and answer it fast, which
+            // is worse than answering slowly.
+            if (scope.condition || mode.mode) {
                 const newest = Math.floor(Date.now() / STEP_MS) * STEP_MS;
-                return res.json(await volumeSeries(scope, newest - 287 * STEP_MS));
+                return res.json(await volumeSeries(scope, newest - 287 * STEP_MS, 288, mode.mode));
             }
             const result = await localDb.query(`
                 SELECT timestamp, started_count
@@ -678,7 +832,7 @@ exports.getExecutionVolume = async (req, res) => {
         // Counted in SQL like every other path. This used to read every execution
         // of the day into memory and then run a filter over the whole array once
         // per bucket — 288 passes to produce 288 numbers.
-        res.json(await volumeSeries(scope, range.start.getTime()));
+        res.json(await volumeSeries(scope, range.start.getTime(), 288, mode.mode));
     } catch (err) {
         log.error(err);
         res.status(500).json({ error: 'Failed to fetch execution volume' });
@@ -758,6 +912,13 @@ exports.getExecutionVolumeDetails = async (req, res) => {
     if (!windowStart) {
         return res.status(400).json({ error: 'time must be a valid ISO date' });
     }
+
+    // The same filter the bar was drawn with. L-30 was exactly this shape of
+    // bug: a bar and its drill-down answering slightly different questions, so
+    // clicking one of height 12 opened a list of 30. A mode filter applied to
+    // the chart and not to the modal would recreate it.
+    const mode = parseExecutionMode(req.query.mode);
+    if (!mode.ok) return res.status(400).json({ error: mode.error });
     // Bounds computed here rather than with a datetime() modifier in SQL, which
     // would wrap the indexed column and force a scan.
     const windowStartIso = windowStart.toISOString();
@@ -766,16 +927,18 @@ exports.getExecutionVolumeDetails = async (req, res) => {
     try {
         const scope = scopeClause(req.scope, 'e."workflowId"');
         const query = `
-            SELECT w.name as workflow_name, w.id as workflow_id, e.id as exec_id, e.status, e."startedAt", e."stoppedAt",
+            SELECT w.name as workflow_name, w.id as workflow_id, w."isArchived" AS is_archived,
+                   e.id as exec_id, e.status, e."startedAt", e."stoppedAt", e.mode,
                    (julianday(IFNULL(e."stoppedAt", ?)) - julianday(e."startedAt")) * 86400 as current_duration
             FROM execution_entity e
             JOIN workflow_entity w ON e."workflowId" = w.id
-            WHERE e."startedAt" >= ? AND e."startedAt" < ?${scope.sql}
+            WHERE e."startedAt" >= ? AND e."startedAt" < ?${mode.mode ? ' AND e.mode = ?' : ''}${scope.sql}
             ORDER BY e."startedAt" DESC
             LIMIT 50
         `;
         const result = await localDb.query(query, [
-            new Date().toISOString(), windowStartIso, windowEndIso, ...scope.params
+            new Date().toISOString(), windowStartIso, windowEndIso,
+            ...(mode.mode ? [mode.mode] : []), ...scope.params
         ]);
 
         const finalUrl = process.env.N8N_EDITOR_BASE_URL || '';
@@ -790,6 +953,41 @@ exports.getExecutionVolumeDetails = async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch execution volume details' });
     }
 };
+
+// What the old static map called transient. Kept only to measure how often it
+// disagrees with the observed behaviour (F-08) — nothing decides on it any more.
+const STATIC_TRANSIENT = new Set(['rate_limit', 'network', 'upstream']);
+
+// Below this many occurrences there is nothing to conclude. One failure followed
+// by one success is a 100% recovery rate and means nothing at all, and a badge
+// reading "transient" on that evidence is worse than no badge.
+const MIN_BEHAVIOUR_OBSERVATIONS = 5;
+
+/**
+ * Transient, structural, or somewhere in between — decided by outcomes.
+ *
+ * Three bands rather than two, because the data has three shapes and collapsing
+ * the middle one into either neighbour loses the distinction that matters. An
+ * error recovering 76% of the time and one recovering 0% of the time both get
+ * called "sometimes fails" under a single threshold; here the first is transient
+ * (leave it to the retry), the last is structural (fix it), and the band between
+ * is intermittent (watch it — this is where the flaky upstreams live).
+ */
+function natureOf(row) {
+    const observed = row ? row.observed : 0;
+    const recovered = row ? row.recovered : 0;
+    if (observed < MIN_BEHAVIOUR_OBSERVATIONS) {
+        return { behaviour: 'unknown', observed, recovered, recovery_rate: null };
+    }
+    const rate = recovered / observed;
+    const behaviour = rate >= 0.7 ? 'transient' : (rate <= 0.1 ? 'structural' : 'intermittent');
+    return { behaviour, observed, recovered, recovery_rate: Math.round(rate * 1000) / 10 };
+}
+
+// Exported for the tests: the banding is a judgement call expressed as numbers,
+// which is exactly the kind of thing that should be pinned down by assertion
+// rather than by reading it back.
+exports._internal = { natureOf, STATIC_TRANSIENT, MIN_BEHAVIOUR_OBSERVATIONS };
 
 exports.getErrorIntelligence = async (req, res) => {
     try {
@@ -812,10 +1010,13 @@ exports.getErrorIntelligence = async (req, res) => {
         const prevStartIso = new Date(new Date(startIso).getTime() - durationMs).toISOString();
 
         // Three different tables key the same thing under three different names.
-        const aScope = scopeClause(req.scope, 'workflow_id');        // analytics, unaliased
-        const aaScope = scopeClause(req.scope, 'a.workflow_id');     // analytics, aliased
-        const eScope = scopeClause(req.scope, '"workflowId"');       // executions, unaliased
-        const weScope = scopeClause(req.scope, 'w.id');              // workflows, aliased
+        const aScope = restrict(req, 'workflow_id');        // analytics, unaliased
+        const aaScope = restrict(req, 'a.workflow_id');     // analytics, aliased
+        const eScope = restrict(req, '"workflowId"');       // executions, unaliased
+        const weScope = restrict(req, 'w.id');              // workflows, aliased
+        for (const f of [aScope, aaScope, eScope, weScope]) {
+            if (!f.ok) return res.status(400).json({ error: f.error });
+        }
 
         // 1. Summary Stats
         const summaryQuery = `
@@ -876,35 +1077,113 @@ exports.getErrorIntelligence = async (req, res) => {
             LIMIT 15
         `;
 
-        // 5. Deduplicated Error Groups
+        // 5. Error groups, keyed on fingerprint (F-07).
+        //
+        // This used to group on (category, node_name, first 200 characters of the
+        // message), which files "Column 'remedy_id' does not exist" and "Column
+        // 'receivedDateTime' does not exist" as unrelated problems. It turned
+        // 14,267 errors into 1,524 groups — more rows than the table it replaced,
+        // and not one of them a unit of work. The same errors produce 98
+        // fingerprints.
+        //
+        // The old form could not use an index either: SUBSTR() on the left of a
+        // comparison is a function of the column, so both the grouping and the
+        // drill-down behind it scanned. `fingerprint` is indexed with timestamp.
         const groupsQuery = `
-            SELECT 
-                a.error_category,
-                a.node_name,
-                a.node_type,
-                SUBSTR(a.error_message, 1, 200) as error_summary,
+            SELECT
+                a.fingerprint,
+                f.normalized_message,
+                f.sample_message,
+                f.node_type,
+                f.status,
+                f.notes,
+                f.first_seen as ever_first_seen,
                 COUNT(*) as count,
                 COUNT(DISTINCT a.workflow_id) as affected_workflows,
                 MIN(a.timestamp) as first_seen,
                 MAX(a.timestamp) as last_seen,
-                GROUP_CONCAT(DISTINCT w.name) as workflow_names
+                GROUP_CONCAT(DISTINCT w.name) as workflow_names,
+                GROUP_CONCAT(DISTINCT a.node_name) as node_names
             FROM execution_error_analytics a
             JOIN workflow_entity w ON a.workflow_id = w.id
-            WHERE a.timestamp >= ? AND a.timestamp <= ?${aaScope.sql}
-            GROUP BY a.error_category, a.node_name, SUBSTR(a.error_message, 1, 200)
+            LEFT JOIN error_fingerprints f ON f.fingerprint = a.fingerprint
+            WHERE a.timestamp >= ? AND a.timestamp <= ?
+              AND a.fingerprint IS NOT NULL${aaScope.sql}
+            GROUP BY a.fingerprint
             ORDER BY count DESC
             LIMIT 50
         `;
 
-        const [summary, prevSummary, execCount, categories, trend, health, groups] = await Promise.all([
-            localDb.query(summaryQuery, [startIso, endIso, ...aScope.params]),
-            localDb.query(prevSummaryQuery, [prevStartIso, prevEndIso, ...aScope.params]),
-            localDb.query(execCountQuery, [startIso, endIso, ...eScope.params]),
-            localDb.query(categoryQuery, [startIso, endIso, ...aScope.params]),
-            localDb.query(trendQuery, [startIso, endIso, ...aScope.params]),
-            localDb.query(healthQuery, [startIso, endIso, ...weScope.params]),
-            localDb.query(groupsQuery, [startIso, endIso, ...aaScope.params])
-        ]);
+        // 5b. How each fingerprint actually behaves (F-08).
+        //
+        // "Transient" was decided by a static map: rate_limit, network and
+        // upstream were transient, everything else structural. That is a guess
+        // about the wording of a message, and on this instance it is wrong more
+        // often than right — four of the six fingerprints with enough
+        // occurrences to judge behave the opposite way from their label. The
+        // clearest case is an upstream returning "service suspended", filed as
+        // transient, which recovered 0 times out of 47. A service that is
+        // suspended is not going to un-suspend itself.
+        //
+        // The measurement instead: for each failure, did the next run of the
+        // same workflow succeed? That is a proxy — a different trigger could
+        // succeed while the failing path stays broken — but it is a proxy made
+        // of observed outcomes rather than of vocabulary, and it is the question
+        // the item asks: does this fix itself, or has it never once passed.
+        //
+        // LEAD over (workflowId, startedAt) rather than a correlated subquery per
+        // error row: idx_exec_wf_started is already in that order, so the window
+        // is served by the index instead of 14,000 seeks. Deliberately NOT bounded
+        // at the top of the range — an error that is the last execution in the
+        // window would otherwise be counted as never recovering, purely because
+        // the window ended.
+        const behaviourQuery = `
+            WITH ex AS (
+                SELECT id, LEAD(status) OVER (
+                           PARTITION BY "workflowId" ORDER BY "startedAt", id
+                       ) AS next_status
+                  FROM execution_entity
+                 WHERE "startedAt" >= ?
+            )
+            SELECT a.fingerprint,
+                   COUNT(*) AS observed,
+                   SUM(CASE WHEN ex.next_status = 'success' THEN 1 ELSE 0 END) AS recovered
+              FROM execution_error_analytics a
+              JOIN ex ON ex.id = a.id
+             WHERE a.timestamp >= ? AND a.timestamp <= ?
+               AND a.fingerprint IS NOT NULL${aScope.sql}
+             GROUP BY a.fingerprint
+        `;
+
+        // Category per fingerprint, counted rather than picked.
+        //
+        // The fingerprint deliberately excludes the category — the category is
+        // derived by rules that carry their own version and get recomputed, and
+        // folding it into the identity would mean a classifier change silently
+        // renamed every historical group. The consequence is that one fingerprint
+        // can span categories (the same message with different HTTP codes), so
+        // the group is labelled with its most frequent one and says how many it
+        // spans, instead of an arbitrary MAX() that would look decisive.
+        const groupCategoryQuery = `
+            SELECT a.fingerprint, a.error_category, COUNT(*) as count
+            FROM execution_error_analytics a
+            WHERE a.timestamp >= ? AND a.timestamp <= ?
+              AND a.fingerprint IS NOT NULL${aScope.sql}
+            GROUP BY a.fingerprint, a.error_category
+        `;
+
+        const [summary, prevSummary, execCount, categories, trend, health, groups, groupCategories,
+            behaviour] = await Promise.all([
+                localDb.query(summaryQuery, [startIso, endIso, ...aScope.params]),
+                localDb.query(prevSummaryQuery, [prevStartIso, prevEndIso, ...aScope.params]),
+                localDb.query(execCountQuery, [startIso, endIso, ...eScope.params]),
+                localDb.query(categoryQuery, [startIso, endIso, ...aScope.params]),
+                localDb.query(trendQuery, [startIso, endIso, ...aScope.params]),
+                localDb.query(healthQuery, [startIso, endIso, ...weScope.params]),
+                localDb.query(groupsQuery, [startIso, endIso, ...aaScope.params]),
+                localDb.query(groupCategoryQuery, [startIso, endIso, ...aScope.params]),
+                localDb.query(behaviourQuery, [startIso, startIso, endIso, ...aScope.params])
+            ]);
 
         const totalErrors = summary.rows[0].total_errors || 0;
         const prevTotalErrors = prevSummary.rows[0].total_errors || 0;
@@ -921,20 +1200,65 @@ exports.getErrorIntelligence = async (req, res) => {
         }
         const trendData = Object.values(trendMap);
 
-        // Mark error groups as active/recurring/resolved
-        const now = new Date();
-        const oneDayAgo = new Date(now.getTime() - 24 * 3600000).toISOString();
-        const enrichedGroups = groups.rows.map(g => ({
-            ...g,
-            workflow_names: g.workflow_names ? g.workflow_names.split(',').slice(0, 3) : [],
-            status: g.last_seen >= oneDayAgo ? 'active' : 'recurring'
-        }));
+        // The dominant category per fingerprint, and how many it spans.
+        const catsByFp = new Map();
+        for (const row of groupCategories.rows) {
+            if (!catsByFp.has(row.fingerprint)) catsByFp.set(row.fingerprint, []);
+            catsByFp.get(row.fingerprint).push(row);
+        }
+
+        const behaviourByFp = new Map(behaviour.rows.map(r => [r.fingerprint, r]));
+
+        const oneDayAgo = new Date(Date.now() - 24 * 3600000).toISOString();
+        const enrichedGroups = groups.rows.map(g => {
+            const cats = (catsByFp.get(g.fingerprint) || []).sort((x, y) => y.count - x.count);
+            const nature = natureOf(behaviourByFp.get(g.fingerprint));
+            const category = cats.length ? cats[0].error_category : 'unknown';
+            return {
+                ...g,
+                ...nature,
+                // Whether the old static map would have said something else. Shown
+                // rather than quietly corrected: the label is what every other
+                // tool reports, and the disagreement is the finding.
+                label_disagrees: nature.behaviour !== 'unknown' &&
+                    STATIC_TRANSIENT.has(category) !== (nature.behaviour === 'transient'),
+                error_category: category,
+                category_count: cats.length,
+                error_summary: g.sample_message || g.normalized_message || '',
+                node_name: g.node_names || '',
+                workflow_names: g.workflow_names ? g.workflow_names.split(',').slice(0, 3) : [],
+                // Two different states, kept apart. `activity` is derived from the
+                // data — has this been seen today. `status` is what a person
+                // decided about it and lives on the fingerprint row. The previous
+                // version wrote 'active' into the same field a lifecycle status
+                // would occupy, which is fine until there is a lifecycle.
+                activity: g.last_seen >= oneDayAgo ? 'active' : 'recurring',
+                status: g.status || 'open',
+                // First seen ever, not first seen in this window — the difference
+                // is exactly what "this is new" means, and it is the condition
+                // F-13 will alert on.
+                is_new: !!(g.ever_first_seen && g.ever_first_seen >= startIso)
+            };
+        });
 
         const n8nBaseUrl = process.env.N8N_EDITOR_BASE_URL || '';
 
         res.json({
             summary: {
                 ...summary.rows[0],
+                // Behaviour-derived counts, alongside the static ones the summary
+                // query still produces. Both are reported because they disagree,
+                // and which of them is right is the point of F-08.
+                transient_observed: enrichedGroups
+                    .filter(g => g.behaviour === 'transient')
+                    .reduce((a, g) => a + g.count, 0),
+                structural_observed: enrichedGroups
+                    .filter(g => g.behaviour === 'structural')
+                    .reduce((a, g) => a + g.count, 0),
+                intermittent_observed: enrichedGroups
+                    .filter(g => g.behaviour === 'intermittent')
+                    .reduce((a, g) => a + g.count, 0),
+                mislabelled_groups: enrichedGroups.filter(g => g.label_disagrees).length,
                 total_executions: totalExecs,
                 error_rate: totalExecs > 0 ? ((totalErrors / totalExecs) * 100).toFixed(1) : 0,
                 trend_pct: Math.round(trendPct * 10) / 10
@@ -943,6 +1267,9 @@ exports.getErrorIntelligence = async (req, res) => {
             trend: trendData,
             workflows: health.rows,
             errorGroups: enrichedGroups,
+            // How much the fingerprinting collapsed, so the change is visible
+            // rather than merely asserted in a commit message.
+            grouping: { by: 'fingerprint', groups: enrichedGroups.length },
             n8nBaseUrl
         });
 
@@ -1022,9 +1349,16 @@ exports.getWorkflowErrorDrilldown = async (req, res) => {
 
 exports.getErrorGroupExecutions = async (req, res) => {
     try {
-        const { category, nodeName, summary, startDate, endDate } = req.body;
+        const { fingerprint, startDate, endDate } = req.body;
 
-        if (!category || !nodeName || !summary || !startDate || !endDate) {
+        // A fingerprint is 16 hex characters produced by this server. Anything
+        // else is not a value a client could have got from us, and validating the
+        // shape keeps a malformed one from being answered with an empty list that
+        // reads as "no occurrences".
+        if (typeof fingerprint !== 'string' || !/^[0-9a-f]{16}$/.test(fingerprint)) {
+            return res.status(400).json({ error: 'A valid fingerprint is required' });
+        }
+        if (!startDate || !endDate) {
             return res.status(400).json({ error: 'Missing required parameters' });
         }
 
@@ -1034,21 +1368,25 @@ exports.getErrorGroupExecutions = async (req, res) => {
         if (!range.ok) return res.status(400).json({ error: range.error });
 
         const scope = scopeClause(req.scope, 'a.workflow_id');
+
+        // One indexed lookup. The previous version matched on error_category,
+        // node_name and SUBSTR(error_message, 1, 200) together — three columns,
+        // one of them behind a function call, so it scanned the whole table and
+        // still disagreed with the grouping whenever a message differed after the
+        // 200th character.
         const query = `
-            SELECT a.id as exec_id, a.timestamp, w.name as workflow_name
+            SELECT a.id as exec_id, a.timestamp, a.node_name, a.error_category,
+                   a.error_message, w.name as workflow_name
             FROM execution_error_analytics a
             JOIN workflow_entity w ON a.workflow_id = w.id
-            WHERE a.timestamp >= ? AND a.timestamp <= ?
-              AND a.error_category = ?
-              AND a.node_name = ?
-              AND SUBSTR(a.error_message, 1, 200) = ?${scope.sql}
+            WHERE a.fingerprint = ?
+              AND a.timestamp >= ? AND a.timestamp <= ?${scope.sql}
             ORDER BY a.timestamp DESC
             LIMIT 30
         `;
-        
+
         const result = await localDb.query(query, [
-            range.start.toISOString(), range.end.toISOString(), category, nodeName, summary,
-            ...scope.params
+            fingerprint, range.start.toISOString(), range.end.toISOString(), ...scope.params
         ]);
         res.json({ executions: result.rows });
     } catch (err) {
@@ -1056,3 +1394,4 @@ exports.getErrorGroupExecutions = async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch group executions' });
     }
 };
+

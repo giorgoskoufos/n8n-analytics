@@ -189,7 +189,8 @@ app.use((err, req, res, next) => {
 
 // ETL Sync Engine
 const cron = require('node-cron');
-const { syncData, waitForIdle } = require('./src/config/syncJob');
+const { syncData, waitForIdle, backfillFingerprints } = require('./src/config/syncJob');
+const { runAlertPass } = require('./src/config/alertEngine');
 
 // Start competing for the ETL lock immediately. The heartbeat runs whether or
 // not we win: if the current writer goes away, this instance takes over on its
@@ -211,6 +212,53 @@ const syncTask = cron.schedule(`*/${syncInterval} * * * *`, () => {
 const bootSyncTimer = process.env.SKIP_BOOT_SYNC === '1'
     ? null
     : setTimeout(() => { syncData(); }, 2000);
+
+/**
+ * Error fingerprinting (F-07), scheduled apart from the ETL.
+ *
+ * It reads and writes only the replica — no Postgres, no network — and that is
+ * why it does not live solely inside the sync cycle. A cycle aborts the moment
+ * the source database is unreachable, and an instance in that state is exactly
+ * when someone is staring at the error history it already has. Grouping that
+ * history should not depend on the thing that is broken.
+ *
+ * Runs once shortly after the schema is ready and then alongside each sync tick.
+ * Both are no-ops once the backfill has finished — one settings read.
+ */
+function maintainFingerprints() {
+    backfillFingerprints().catch((err) => {
+        log.error('Fingerprint maintenance failed:', err.message);
+    });
+}
+
+const fingerprintTimer = setTimeout(() => {
+    localDb.ready.then(maintainFingerprints);
+}, 1000);
+const fingerprintTask = cron.schedule(`*/${syncInterval} * * * *`, maintainFingerprints);
+
+/**
+ * The alert pass (F-13), scheduled beside the ETL rather than inside it.
+ *
+ * Every rule reads the replica and nothing else, so a deployment whose Postgres
+ * is unreachable — or whose ETL writer has died — should still be able to tell
+ * someone that the workflows stopped. Putting it inside syncData would make
+ * alerting fail in precisely the situation it exists for.
+ *
+ * It runs shortly after each sync tick rather than at the same moment, so it
+ * judges data the cycle has already written instead of racing it. The pass skips
+ * itself when the replica is too stale to judge, which is what stops a stalled
+ * pipeline from reporting every scheduled workflow as dead.
+ */
+function evaluateAlerts() {
+    runAlertPass().catch((err) => log.error('Alert pass failed:', err.message));
+}
+
+const ALERT_DELAY_MS = Number(process.env.ALERT_DELAY_MS) || 30000;
+let alertDelayTimer = null;
+const alertTask = cron.schedule(`*/${syncInterval} * * * *`, () => {
+    clearTimeout(alertDelayTimer);
+    alertDelayTimer = setTimeout(evaluateAlerts, ALERT_DELAY_MS);
+});
 
 // Server Initialization.
 //
@@ -293,7 +341,11 @@ async function shutdown(signal, exitCode = 0) {
     try {
         // 1. Stop scheduling new work first, so nothing starts while we drain.
         if (bootSyncTimer) clearTimeout(bootSyncTimer);
+        if (fingerprintTimer) clearTimeout(fingerprintTimer);
         if (syncTask) (syncTask.destroy || syncTask.stop).call(syncTask);
+        if (fingerprintTask) (fingerprintTask.destroy || fingerprintTask.stop).call(fingerprintTask);
+        if (alertDelayTimer) clearTimeout(alertDelayTimer);
+        if (alertTask) (alertTask.destroy || alertTask.stop).call(alertTask);
         log.info('Cron stopped.');
 
         // 2. Stop accepting connections. In-flight requests keep their sockets.
