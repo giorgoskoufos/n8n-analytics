@@ -38,26 +38,29 @@
 
     const esc = (v) => (window.escapeHtml ? window.escapeHtml(String(v ?? '')) : String(v ?? ''));
 
+    // Tone names, not class strings. The pill is rendered through the shared
+    // badge now, so "what colour is 'late'" is answered in input.css and here
+    // only in words (F-24 §7).
     const PILL = {
-        ok: ['bg-green-900/40', 'text-green-400', 'Running'],
-        late: ['bg-amber-900/40', 'text-amber-300', 'Late'],
-        stalled: ['bg-rose-900/40', 'text-rose-300', 'Stalled'],
-        unknown: ['bg-gray-800', 'text-gray-400', 'No runs yet']
+        ok: ['good', 'Running'],
+        late: ['warning', 'Late'],
+        stalled: ['critical', 'Stalled'],
+        unknown: ['neutral', 'No runs yet']
     };
 
     function tile(label, value, sub, tone = 'text-white') {
-        return `<div class="bg-n8n-dark/60 border border-gray-800 rounded-lg p-4">
-            <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">${esc(label)}</p>
+        return `<div class="bg-n8n-dark/60 border border-line rounded-lg p-4">
+            <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-1">${esc(label)}</p>
             <p class="text-xl font-bold ${tone}">${value}</p>
-            <p class="text-[11px] text-gray-500 mt-1">${sub || ''}</p>
+            <p class="text-[11px] text-ink-3 mt-1">${sub || ''}</p>
         </div>`;
     }
 
     function row(label, value, note) {
-        return `<div class="flex items-baseline justify-between gap-4 py-2 border-b border-gray-800/60 last:border-0">
-            <span class="text-xs text-gray-400">${esc(label)}</span>
-            <span class="text-xs text-gray-200 text-right font-mono">${value}${
-    note ? `<span class="block text-[10px] text-gray-500 font-sans not-italic">${note}</span>` : ''
+        return `<div class="flex items-baseline justify-between gap-4 py-2 border-b border-line/60 last:border-0">
+            <span class="text-xs text-ink-2">${esc(label)}</span>
+            <span class="text-xs text-ink-1 text-right font-mono">${value}${
+    note ? `<span class="block text-[10px] text-ink-3 font-sans not-italic">${note}</span>` : ''
 }</span>
         </div>`;
     }
@@ -74,7 +77,7 @@
      */
     function sparkline(history) {
         if (!history || history.length === 0) {
-            return '<p class="text-xs text-gray-500 italic">No runs recorded yet.</p>';
+            return '<p class="text-xs text-ink-3 italic">No runs recorded yet.</p>';
         }
         const recent = history.slice(-120);
         const max = Math.max(...recent.map((r) => r.duration_ms || 0), 1);
@@ -89,7 +92,7 @@
                 `class="w-[3px] shrink-0 rounded-sm ${ok ? 'bg-indigo-500/70' : 'bg-rose-500'}"></span>`;
         }).join('');
         return `<div class="flex items-end gap-[2px] h-[44px] overflow-x-auto">${bars}</div>
-            <p class="text-[10px] text-gray-500 mt-2">${recent.length} most recent passes ·
+            <p class="text-[10px] text-ink-3 mt-2">${recent.length} most recent passes ·
             tallest bar = ${took(max)}</p>`;
     }
 
@@ -101,7 +104,7 @@
         const fp = d.fingerprints || {};
         const g = st.growth || {};
 
-        const pillText = (PILL[p.status] || PILL.unknown)[2];
+        const pillText = (PILL[p.status] || PILL.unknown)[1];
 
         // The pipeline being healthy and the data being fresh are two different
         // claims, and the case where they disagree — syncing fine, source gone
@@ -127,7 +130,7 @@
         `every ${Math.round((p.expected_interval_ms || 0) / 60000)} min · ${esc(pillText)}`)}
             ${tile('Newest execution', esc(ago(d.data && d.data.data_age_ms)),
         `${(d.data && d.data.executions || 0).toLocaleString()} in the replica`)}
-            ${tile('Passes (24h)', `${r.ok || 0}<span class="text-gray-600">/${r.total || 0}</span>`,
+            ${tile('Passes (24h)', `${r.ok || 0}<span class="text-ink-3">/${r.total || 0}</span>`,
         `${r.failed || 0} failed · p95 ${took(r.duration_ms && r.duration_ms.p95)}`,
         (r.failed || 0) > 0 ? 'text-amber-300' : 'text-green-400')}
             ${tile('Replica file', bytes(st.bytes),
@@ -135,13 +138,13 @@
         </div>
 
         <div>
-            <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-2">Pass duration</p>
+            <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-2">Pass duration</p>
             ${sparkline(r.history)}
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8">
             <div>
-                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Pipeline</p>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-1">Pipeline</p>
                 ${row('Last pass finished', esc(p.last_run_at || '—'), esc(p.last_status || ''))}
                 ${row('Last success', esc(p.last_success_at || 'none recorded'))}
                 ${row('Executions moved (24h)', (r.executions || 0).toLocaleString())}
@@ -149,7 +152,7 @@
         `slowest ${took(r.duration_ms && r.duration_ms.max)}`)}
             </div>
             <div>
-                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1">Error analytics queue</p>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-1">Error analytics queue</p>
                 ${row('Pending', (q.pending || 0).toLocaleString(),
         q.oldest_pending_at ? `oldest queued ${esc(q.oldest_pending_at)}` : '')}
                 ${row('Parked after retries', (q.failed || 0).toLocaleString())}
@@ -158,7 +161,7 @@
         (fp.unfingerprinted || 0) > 0 ? 'the backfill is still walking' : 'backfill complete')}
             </div>
             <div>
-                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1 mt-4">Storage</p>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-1 mt-4">Storage</p>
                 ${row('File size', bytes(st.bytes))}
                 ${row('Reclaimable', bytes(st.reclaimable_bytes),
         `${(st.free_pages || 0).toLocaleString()} free pages`)}
@@ -170,7 +173,7 @@
         st.last_vacuum_at ? '' : 'run scripts/optimizeReplica.js --apply offline')}
             </div>
             <div>
-                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-1 mt-4">Error intelligence</p>
+                <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-1 mt-4">Error intelligence</p>
                 ${row('Fingerprint groups', (fp.groups || 0).toLocaleString(),
         `${(fp.triaged || 0).toLocaleString()} triaged`)}
                 ${row('Fingerprint rules', `v${esc(fp.version || '?')}`,
@@ -188,41 +191,35 @@
         const body = document.getElementById('healthBody');
         const pill = document.getElementById('healthPill');
         if (!body) return;
-        body.innerHTML = '<p class="text-sm text-gray-500 italic">Loading&hellip;</p>';
+        body.innerHTML = window.UI.loading('This counts every row in the replica, so it takes a moment.');
         try {
             const res = await window.fetchWithAuth('/api/analytics/system');
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             body.innerHTML = render(data);
             if (pill) {
-                const [bg, fg, text] = PILL[data.pipeline.status] || PILL.unknown;
-                pill.className = `text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-full ${bg} ${fg}`;
-                pill.textContent = text;
+                const [tone, text] = PILL[data.pipeline.status] || PILL.unknown;
+                pill.outerHTML = window.UI.badge(text, { tone, cls: 'ml-2' })
+                    .replace('<span class="badge', '<span id="healthPill" class="badge');
             }
             loaded = true;
         } catch (err) {
-            body.innerHTML = `<p class="text-sm text-rose-400">Could not read dashboard health: ${
-                esc(err.message)}</p>`;
+            body.innerHTML = window.UI.failed(`Could not read dashboard health: ${esc(err.message)}`);
         }
     }
 
-    // Wired here rather than in settings_accordions.js on purpose: this panel
-    // has to know the difference between "expanded" and "collapsed" to decide
-    // whether to fetch, and two independent click handlers racing over the same
-    // class is a bug that would only show up as an occasional missing panel.
-    const toggle = document.getElementById('healthToggle');
-    const content = document.getElementById('healthContent');
-    const arrow = document.getElementById('healthArrow');
-    const refresh = document.getElementById('healthRefresh');
+    // Loaded when its view is first shown, not on page load.
+    //
+    // This query counts every row in the replica — around half a million — and
+    // it used to be behind a collapsed accordion, which at least meant it did
+    // not run until asked. Turning the sections into tabs would have made it
+    // run on every visit to Settings if this listened for nothing. It listens
+    // for the section becoming visible instead, and only the first time:
+    // switching tabs back and forth must not re-run it. That is what Refresh is.
+    document.addEventListener('settings:section', (e) => {
+        if (e.detail.section === 'health' && !loaded) load();
+    });
 
-    if (toggle && content) {
-        toggle.addEventListener('click', () => {
-            const collapsed = content.classList.toggle('hidden');
-            if (arrow) arrow.classList.toggle('rotate-180', !collapsed);
-            // First expand only. Someone opening and closing the panel twice
-            // must not fire the expensive query twice; that is what Refresh is.
-            if (!collapsed && !loaded) load();
-        });
-    }
+    const refresh = document.getElementById('healthRefresh');
     if (refresh) refresh.addEventListener('click', load);
 })();

@@ -46,12 +46,12 @@ window.loadMoreExecutions = async function(reset = false) {
             // still appear here, because they happened. Marked so the row does
             // not read as a workflow anyone can still open.
             const archivedTag = exec.is_archived
-                ? ' <span class="text-[9px] uppercase tracking-widest text-gray-600 border border-gray-700 rounded px-1 py-0.5 ml-1">archived</span>'
+                ? ' <span class="text-[9px] uppercase tracking-widest text-ink-3 border border-line-2 rounded px-1 py-0.5 ml-1">archived</span>'
                 : '';
 
             rows.push(`
-                <tr class="hover:bg-gray-800/30 transition-colors text-sm border-b border-gray-800/50" ${actionAttr}>
-                    <td class="p-4 text-gray-500 font-mono">#${escapeHtml(exec.exec_id)}</td>
+                <tr class="hover:bg-gray-800/30 transition-colors text-sm border-b border-line/50" ${actionAttr}>
+                    <td class="p-4 text-ink-3 font-mono">#${escapeHtml(exec.exec_id)}</td>
                     <td class="p-4 text-white">${escapeHtml(exec.name)}${archivedTag}</td>
                     <td class="p-4">${statusHtml}</td>
                     <td class="p-4 text-n8n-text">${escapeHtml(startStr)}</td>
@@ -179,7 +179,7 @@ window.initDateFilter = async function() {
                 const btn = document.getElementById('btnConc24h');
                 if (btn) {
                     btn.classList.replace('bg-indigo-600/20', 'bg-gray-800/40');
-                    btn.classList.replace('text-indigo-400', 'text-gray-400');
+                    btn.classList.replace('text-indigo-400', 'text-ink-2');
                 }
                 fetchConcurrency(e.target.value);
             });

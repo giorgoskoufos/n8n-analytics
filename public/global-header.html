@@ -1,74 +1,140 @@
-<!-- Global Header Template -->
-<!-- Backdrop Overlay -->
-<div id="burgerOverlay"
-    class="fixed inset-0 bg-n8n-dark/40 backdrop-blur-md z-40 hidden opacity-0 transition-opacity duration-300">
-</div>
+<!--
+  App shell template — F-24 §2.
 
-<header class="flex flex-row justify-between items-center mb-8 gap-4 relative z-50">
-    <!-- LEFT: Burger Section -->
-    <div id="burger-insertion-point" class="relative">
-        <button id="burgerBtn"
-            class="flex items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 shadow-inner hover:bg-white/10 transition-all focus:outline-none">
-            <i class="fa-solid fa-bars fa-fw text-lg text-gray-400"></i>
-        </button>
-        <div id="burgerMenu"
-            class="absolute left-0 mt-2 w-56 bg-n8n-card border border-gray-700 rounded-lg shadow-2xl hidden flex-col z-50 overflow-hidden divide-y divide-gray-800">
-            <a href="index.html" id="nav-home"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-chart-pie fa-fw mr-3 w-4"></i>Dashboard
+  Navigation was a dropdown, and it was a dropdown on the desktop too: six
+  destinations behind a click, and "where am I" expressed as a background colour
+  on an element that is invisible until the menu is open. The sync-lag pill had
+  the same cause — it was wedged between the burger and the brand with
+  `hidden md:flex` precisely because there was nowhere else to put it, and it
+  belongs next to the n8n status, which lived at the bottom of that same
+  invisible dropdown.
+
+  Both are one problem. A persistent rail has a place for them.
+
+  The file is split into two templates. header.js takes the <aside> and builds
+  the shell around whatever the page already had in its <body>, so a page does
+  not restructure itself to get a sidebar — that is the same reason this markup
+  is fetched rather than pasted into six files that would then drift.
+-->
+
+<!-- ===================== TEMPLATE: rail ===================== -->
+<template id="tpl-shell-nav">
+    <aside class="shell-nav" id="appNav">
+        <!-- Brand -->
+        <div class="flex items-center gap-2.5 px-4 h-[60px] shrink-0" style="border-bottom:1px solid var(--line)">
+            <img src="/assets/n8n_db.svg" alt="" class="w-7 h-7 object-contain shrink-0">
+            <span class="nav-label font-bold text-[15px]" style="color:var(--ink-1)">n8n&nbsp;Dashboard</span>
+        </div>
+
+        <!--
+          `overflow-x-hidden` is load-bearing, not defensive tidiness: setting
+          only `overflow-y` leaves `overflow-x` at its initial `visible`, and
+          per spec a `visible`/non-`visible` pair on the same box computes the
+          `visible` side to `auto` too — so ANY future overflow here (a long
+          label, a translation) becomes a real horizontal scrollbar with
+          nothing that says so in this markup. Pin it shut.
+        -->
+        <nav class="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar py-3" aria-label="Main">
+            <p class="nav-section">Analyse</p>
+            <a href="index.html" id="nav-home" class="nav-item">
+                <i class="fa-solid fa-chart-pie nav-icon"></i><span class="nav-label">Dashboard</span>
             </a>
-            <a href="pages/insights.html" id="nav-insights"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-magnifying-glass-chart fa-fw mr-3 w-4 text-indigo-400"></i>Insights
+            <a href="pages/insights.html" id="nav-insights" class="nav-item">
+                <i class="fa-solid fa-magnifying-glass-chart nav-icon"></i><span class="nav-label">Insights</span>
             </a>
-            <a href="pages/errors.html" id="nav-errors"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-triangle-exclamation fa-fw mr-3 w-4 text-red-400"></i>Error Analytics
+            <a href="pages/errors.html" id="nav-errors" class="nav-item">
+                <i class="fa-solid fa-triangle-exclamation nav-icon"></i><span class="nav-label">Error Intelligence</span>
             </a>
-            <a href="pages/alerts.html" id="nav-alerts"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-bell fa-fw mr-3 w-4 text-amber-400"></i>Alerts
+            <a href="pages/roi.html" id="nav-roi" class="nav-item">
+                <i class="fa-solid fa-clock nav-icon"></i><span class="nav-label">ROI Analytics</span>
             </a>
-            <a href="pages/roi.html" id="nav-roi"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-clock fa-fw mr-3 w-4 text-green-400"></i>ROI Analytics
+
+            <p class="nav-section">Act</p>
+            <a href="pages/alerts.html" id="nav-alerts" class="nav-item">
+                <i class="fa-solid fa-bell nav-icon"></i><span class="nav-label">Alerts</span>
             </a>
-            <a href="pages/settings.html" id="nav-settings"
-                class="px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i class="fa-solid fa-gear fa-fw mr-3 w-4 text-gray-400"></i>Settings
+            <a href="pages/settings.html" id="nav-settings" class="nav-item">
+                <i class="fa-solid fa-gear nav-icon"></i><span class="nav-label">Settings</span>
             </a>
-            <button id="syncBtn" data-action="forceDbSync"
-                class="w-full text-left px-4 py-3 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors flex items-center">
-                <i id="syncIcon" class="fa-solid fa-rotate fa-fw mr-3 w-4 text-indigo-400"></i>Sync Data
+
+            <p class="nav-section">Data</p>
+            <!--
+              No `w-full`. `.nav-item` is already `display:flex` on a block-level
+              element, whose auto width fills the row and subtracts the 0.5rem
+              side margins on its own — the same box model the `<a>` items above
+              get for free. `width:100%` doesn't know about those margins, so it
+              added the full width back ON TOP of them: 16px of overflow past the
+              rail's own edge, which the nav's scroll container then exposed as a
+              genuine horizontal scrollbar, and which shifted these two icons 8px
+              off the centre line every other icon collapses to.
+            -->
+            <button id="syncBtn" type="button" data-action="forceDbSync" class="nav-item">
+                <i id="syncIcon" class="fa-solid fa-rotate nav-icon"></i><span class="nav-label">Sync now</span>
             </button>
-            <button data-action="logout"
-                class="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-red-900/30 hover:text-red-300 transition-colors flex items-center bg-red-900/10">
-                <i class="fa-solid fa-right-from-bracket fa-fw mr-3 w-4"></i>Logout
+            <button type="button" data-action="logout" class="nav-item">
+                <i class="fa-solid fa-right-from-bracket nav-icon"></i><span class="nav-label">Log out</span>
             </button>
-            <div id="n8nHealthIndicator"
-                class="px-4 py-3 border-t border-gray-800 flex items-center bg-black/40 text-[10px] text-gray-500 justify-center uppercase tracking-widest font-semibold">
-                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Checking
+        </nav>
+
+        <!--
+          Status foot. Both indicators answer "can I trust what is on screen",
+          and they answer it about different things — one about the pipeline
+          that filled the replica, one about the n8n it read from — so they sit
+          together and are labelled apart.
+
+          Collapsed, the labels go and the two coloured dots remain: the state
+          survives at 64px, the explanation does not, and that is the right way
+          round.
+        -->
+        <div class="shrink-0 px-3 py-3 flex flex-col gap-2" style="border-top:1px solid var(--line)">
+            <div id="syncLagIndicator" class="flex items-center gap-2 text-[10px]" title="Checking…">
+                <i class="fa-solid fa-circle-notch fa-spin nav-icon" style="font-size:11px"></i>
+                <span class="nav-label label" id="syncLagText" style="letter-spacing:.06em">Checking</span>
+            </div>
+            <div id="n8nHealthIndicator" class="flex items-center gap-2 text-[10px]" title="Checking n8n…">
+                <i class="fa-solid fa-circle-notch fa-spin nav-icon" style="font-size:11px"></i>
+                <span class="nav-label label" style="letter-spacing:.06em">Checking</span>
             </div>
         </div>
-    </div>
+    </aside>
 
-    <!-- MIDDLE: F-19 sync lag.
-         Every number on every page is as old as the last ETL pass, and until now
-         nothing said so. Hidden below md: on a phone the brand and the burger
-         already fill the row, and a truncated status line is worse than none. -->
-    <div id="syncLagIndicator"
-        class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-[10px] uppercase tracking-widest font-bold text-gray-500">
-        <i class="fa-solid fa-circle-notch fa-spin"></i><span id="syncLagText">Checking</span>
-    </div>
+    <!--
+      The collapse handle — a sibling of the rail, not a child of it.
 
-    <!-- RIGHT: Brand Section (Title + Logo) -->
-    <div class="flex items-center gap-4 text-right">
-        <div>
-            <h1 id="headerTitle" class="text-xl md:text-2xl font-bold text-white leading-tight">n8n Dashboard</h1>
-            <p id="headerSubtitle" class="text-xs md:text-sm text-gray-400">Real-time workflow analytics</p>
+      The rail clips its own overflow (it must: the labels are `nowrap` and
+      would spill across the content while the column animates), and this
+      control is meant to straddle the border line rather than sit inside it.
+      As a child it would be sliced in half. header.js appends the whole
+      fragment for that reason.
+
+      One control for both directions: `aria-expanded` carries the state and
+      the CSS rotates the chevron off `data-collapsed`, so there is no second
+      copy of "is it open" to drift from the first.
+    -->
+    <button type="button" class="nav-handle" data-action="toggleNavCollapse"
+            aria-controls="appNav" aria-expanded="true" aria-label="Toggle sidebar">
+        <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+    </button>
+</template>
+
+<!-- ===================== TEMPLATE: page header ===================== -->
+<template id="tpl-page-head">
+    <header class="flex items-start justify-between gap-4 mb-6">
+        <div class="flex items-center gap-3 min-w-0">
+            <!-- Drawer trigger. Only below lg — above it the rail is always
+                 there, and a button that opens something already open is a
+                 button that teaches people to distrust buttons. -->
+            <button type="button" class="btn lg:hidden shrink-0" data-action="openNavDrawer"
+                    aria-label="Open navigation" style="width:38px;padding:0">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="min-w-0">
+                <div id="headerCrumbs"></div>
+                <h1 id="headerTitle" class="text-xl md:text-2xl font-bold leading-tight truncate"
+                    style="color:var(--ink-1)">n8n Dashboard</h1>
+                <p id="headerSubtitle" class="text-xs md:text-sm mt-0.5" style="color:var(--ink-3)">Real-time workflow analytics</p>
+            </div>
         </div>
-        <div class="flex items-center justify-center w-10 h-10 rounded-xl bg-white/5 border border-white/10 shadow-inner">
-            <img id="headerLogo" src="/assets/n8n_db.svg" alt="n8n logo" class="w-7 h-7 object-contain">
-        </div>
-    </div>
-</header>
+        <div id="headerActions" class="flex items-center gap-2 shrink-0"></div>
+    </header>
+</template>

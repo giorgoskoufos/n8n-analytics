@@ -28,7 +28,7 @@ async function loadRoiMetrics() {
             tableBody.innerHTML = data.topWorkflows.map(wf => `
                 <tr class="hover:bg-n8n-dark/30 transition-colors">
                     <td class="py-3 pr-4 font-medium text-white">${escapeHtml(wf.name)}</td>
-                    <td class="py-3 px-4 text-right text-gray-300 font-mono">${(parseInt(wf.executions) || 0).toLocaleString()}</td>
+                    <td class="py-3 px-4 text-right text-ink-2 font-mono">${(parseInt(wf.executions) || 0).toLocaleString()}</td>
                     <td class="py-3 px-4 text-right text-green-400 font-bold">${formatTimeExtensive(wf.time_saved_seconds)}</td>
                     <td class="py-3 pl-4 text-right text-emerald-400 font-bold">${formatCurrency(wf.money_saved)}</td>
                 </tr>
@@ -36,7 +36,7 @@ async function loadRoiMetrics() {
         } else {
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="4" class="py-12 text-center text-gray-500">
+                    <td colspan="4" class="py-12 text-center text-ink-3">
                         <i class="fa-solid fa-clock-rotate-left text-4xl mb-3 opacity-20 block"></i>
                         <p>No ROI data available.</p>
                         <a href="settings.html" class="text-indigo-400 hover:text-indigo-300 text-sm mt-2 inline-block underline">Configure Time Saved in Settings</a>

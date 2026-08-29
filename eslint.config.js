@@ -93,6 +93,11 @@ module.exports = [
                 setInterval: 'readonly', clearInterval: 'readonly',
                 alert: 'readonly', IntersectionObserver: 'readonly',
                 URL: 'readonly', URLSearchParams: 'readonly', Event: 'readonly',
+                CustomEvent: 'readonly',
+                // Used by the F-24 UI layer: token reading (getComputedStyle),
+                // the grouped-table collapse selector (CSS.escape) and the
+                // inert parse of HTML error bodies (DOMParser).
+                getComputedStyle: 'readonly', CSS: 'readonly', DOMParser: 'readonly',
                 // Loaded from public/vendor before any of this runs.
                 Chart: 'readonly', marked: 'readonly', DOMPurify: 'readonly',
                 // Cross-file globals. This layer has no module system: files
@@ -115,8 +120,20 @@ module.exports = [
                 populateDropdown: 'writable', populateExecWorkflowDropdown: 'writable', refreshData: 'writable', renderMarkdownSafely: 'writable',
                 renderWorkflows: 'writable', setConcPreset: 'writable', settingsReady: 'writable', setupInfiniteScroll: 'writable',
                 showError: 'writable', showErrorSnapshot: 'writable', switchTab: 'writable', toggleChat: 'writable',
-                updateActiveFilterStyles: 'writable', updateConcurrencyChart: 'writable', updateDoughnutChart: 'writable', updateJumpButtonVisibility: 'writable',
-                updateJumpDirection: 'writable', updateKpiCards: 'writable', updateLineChart: 'writable', userSettings: 'writable',
+                updateActiveFilterStyles: 'writable', updateConcurrencyChart: 'writable', updateDoughnutChart: 'writable',                 updateKpiCards: 'writable', updateLineChart: 'writable', userSettings: 'writable',
+                // F-24. The two new shared layers and the handlers the app shell,
+                // the error pages and the alert editor dispatch through.
+                UI: 'writable', Viz: 'writable', ChatCore: 'writable',
+                TextDecoder: 'readonly',
+                openNavDrawer: 'writable', closeNavDrawer: 'writable', toggleNavCollapse: 'writable',
+                openTrace: 'writable', closeTraceModal: 'writable', renderExecutionTrace: 'writable',
+                filterRelabelled: 'writable', clearErrorFilters: 'writable', setErrorRange: 'writable',
+                setFingerprintStatus: 'writable', setErrorMode: 'writable',
+                addAlertHeader: 'writable', removeAlertHeader: 'writable',
+                importAlertCurl: 'writable', exportAlertCurl: 'writable',
+                showSettingsSection: 'writable',
+                showInsightsGroup: 'writable', reloadVisibleInsights: 'writable',
+                insightsReady: 'writable',
             }
         },
         rules: {

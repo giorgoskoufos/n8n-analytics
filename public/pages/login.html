@@ -1,1 +1,43 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Login - n8n Analytics</title>    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">    <link rel="manifest" href="../assets/site.webmanifest">    <link rel="stylesheet" href="../css/styles.css"></head><body class="h-screen flex items-center justify-center p-4">    <div class="bg-n8n-card border border-gray-800 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-8">        <div class="text-center mb-8">            <div class="bg-n8n-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-n8n-primary/30 shadow-lg shadow-n8n-primary/5">                <img src="../assets/n8n_db.svg" alt="n8n Dashboard Logo" class="w-10 h-10 object-contain">            </div>            <h2 class="text-2xl font-bold text-white mb-2">n8n Analytics</h2>            <p class="text-gray-400 text-sm">Login with your n8n credentials</p>        </div>        <form id="loginForm">            <div class="mb-4">                <label class="block text-gray-400 text-sm font-medium mb-2" for="email">Email</label>                <input type="email" id="email" required class="w-full bg-black/50 border border-gray-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors" placeholder="name@company.com">            </div>            <div class="mb-6">                <label class="block text-gray-400 text-sm font-medium mb-2" for="password">Password</label>                <input type="password" id="password" required class="w-full bg-black/50 border border-gray-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors" placeholder="••••••••">            </div>            <div id="loginError" class="hidden bg-red-900/30 border border-red-900/50 text-red-400 text-sm rounded-lg p-3 mb-6 text-center"></div>            <button type="submit" id="loginBtn" class="w-full bg-n8n-primary hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg transition-all flex justify-center items-center gap-2">                <span>Login</span>                <i class="fa-solid fa-arrow-right text-sm"></i>            </button>        </form>    </div>    <script src="../logic/login.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - n8n Analytics</title>
+    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+    <link rel="manifest" href="../assets/site.webmanifest">
+    <link rel="stylesheet" href="../css/styles.css">
+</head>
+<body class="h-screen flex items-center justify-center p-4">
+    <div class="bg-n8n-card border border-line rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-8">
+        <div class="text-center mb-8">
+            <div class="bg-n8n-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-n8n-primary/30 shadow-lg shadow-n8n-primary/5">
+                <img src="../assets/n8n_db.svg" alt="n8n Dashboard Logo" class="w-10 h-10 object-contain">
+            </div>
+            <h2 class="text-2xl font-bold text-white mb-2">n8n Analytics</h2>
+            <p class="text-ink-2 text-sm">Login with your n8n credentials</p>
+        </div>
+        <form id="loginForm">
+            <div class="mb-4">
+                <label class="block text-ink-2 text-sm font-medium mb-2" for="email">Email</label>
+                <input type="email" id="email" required class="w-full bg-black/50 border border-line-2 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors" placeholder="name@company.com">
+            </div>
+            <div class="mb-6">
+                <label class="block text-ink-2 text-sm font-medium mb-2" for="password">Password</label>
+                <input type="password" id="password" required class="w-full bg-black/50 border border-line-2 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors" placeholder="••••••••">
+            </div>
+            <div id="loginError" class="hidden bg-red-900/30 border border-red-900/50 text-red-400 text-sm rounded-lg p-3 mb-6 text-center"></div>
+            <button type="submit" id="loginBtn" class="w-full bg-n8n-primary hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg transition-all flex justify-center items-center gap-2">
+                <span>Login</span>
+                <i class="fa-solid fa-arrow-right text-sm"></i>
+            </button>
+        </form>
+    </div>
+    <script src="../logic/login.js"></script>
+</body>
+</html>

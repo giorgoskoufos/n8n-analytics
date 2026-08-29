@@ -1,8 +1,15 @@
 // ==========================================
-// n8n AI Chat Widget Logic
+// n8n AI Chat Widget — the floating shell
 // ==========================================
-
-console.log("🤖 AI Chat Widget Initializing...");
+//
+// F-24 §6. This file and chat.js used to be two implementations of the same
+// chat against the same endpoint, and a fix to one never reached the other —
+// most visibly, this one rendered markdown and the full page did not.
+//
+// Everything about MESSAGES now lives in chat-core.js. What remains here is
+// what is genuinely specific to a floating panel on a phone: the open/close
+// transition, the iOS scroll lock, the gesture isolation and the resize handle.
+// None of that has an equivalent on a full page, which is why it stayed.
 
 // Global state
 let isChatOpen = false;
@@ -84,45 +91,31 @@ window.toggleChat = toggleChat;
 
 // --- SECTION 2: EVENT LISTENERS ---
 
+let chat = null;
+
 function initChatWidget() {
-    const sendBtn = document.getElementById('sendBtn');
-    const userInput = document.getElementById('userInput');
     const widget = document.getElementById('chatWidget');
     const chatBox = document.getElementById('chatBox');
 
-    if (sendBtn) {
-        sendBtn.addEventListener('click', sendMessage);
-    }
+    // Sending, rendering, streaming, the SQL disclosure and the history are all
+    // the core's. `compact` is the only thing this shell asks for, and it only
+    // affects type size — a 400px panel and a full page want different reading
+    // sizes and nothing else.
+    chat = window.ChatCore.mount({
+        box: chatBox,
+        input: document.getElementById('userInput'),
+        send: document.getElementById('sendBtn')
+    }, { compact: true });
 
-    if (userInput) {
-        userInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        // Auto-expand textarea
-        userInput.addEventListener('input', function () {
-            this.style.height = 'auto';
-            this.style.height = (this.scrollHeight) + 'px';
-        });
-    }
-
-    // iOS Gesture Isolation: Prevent background panning
+    // iOS gesture isolation: prevent the page behind from panning.
     if (widget && chatBox) {
         widget.addEventListener('touchmove', (e) => {
-            // If the touch is NOT in the scrollable chatBox, block it
-            if (!chatBox.contains(e.target)) {
-                if (isChatOpen) e.preventDefault();
-            }
+            if (!chatBox.contains(e.target) && isChatOpen) e.preventDefault();
         }, { passive: false });
     }
 
-    // Load history on start
-    loadChatHistory();
+    if (chat) chat.loadHistory();
 
-    // Initialize resizer for both desktop and mobile
     initResizer();
 }
 
@@ -153,7 +146,9 @@ function initResizer() {
 
             widget.style.width = `${newWidth}px`;
             widget.style.height = `${newHeight}px`;
-            scrollToBottom();
+            // Resizing shortens the scroll region; without this the newest
+            // message slides out of view while the handle is still held.
+            chat?.scrollToBottom();
         }
 
         function onEnd() {
@@ -173,166 +168,18 @@ function initResizer() {
     handle.addEventListener('touchstart', startResize, { passive: false });
 }
 
-async function loadChatHistory() {
-    const chatBox = document.getElementById('chatBox');
-    if (!chatBox) return;
-
-    try {
-        const response = await fetchWithAuth('/api/chat-history');
-        if (response.ok) {
-            const history = await response.json();
-            if (history.length > 0) {
-                // Clear the default welcome message if there's history
-                chatBox.innerHTML = '';
-                history.forEach(msg => {
-                    appendMessage(msg.role, msg.content, msg.sql_used);
-                });
-                scrollToBottom();
-            }
-        }
-    } catch (err) {
-        console.error("🤖 Failed to load chat history:", err);
-    }
-}
-
-// Run init
+// Run init. This script is loaded at the end of <body>, so on a fast page the
+// document may already be interactive by the time it executes and the event
+// would never fire.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initChatWidget);
 } else {
     initChatWidget();
 }
 
-// --- SECTION 3: CORE CHAT LOGIC ---
-
-async function sendMessage() {
-    const input = document.getElementById('userInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const text = input.value.trim();
-    if (!text) return;
-
-    appendMessage('user', text);
-
-    input.value = '';
-    input.style.height = 'auto';
-    input.disabled = true;
-    sendBtn.disabled = true;
-
-    const loadingId = showTypingIndicator();
-
-    try {
-        const response = await fetchWithAuth('/api/ai-chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text })
-        });
-
-        const data = await response.json();
-        removeMessage(loadingId);
-
-        if (response.ok) {
-            appendMessage('ai', data.answer, data.sqlUsed);
-        } else {
-            appendMessage('error', data.error || 'AI encountered an issue.', data.details);
-        }
-    } catch (err) {
-        removeMessage(loadingId);
-        appendMessage('error', 'Connection failed. Please try again.');
-        console.error("AI Chat Widget Error:", err);
-    } finally {
-        input.disabled = false;
-        sendBtn.disabled = false;
-        input.focus();
-    }
-}
-
-// --- SECTION 4: UI UPDATERS ---
-
-function appendMessage(role, text, sql = null) {
-    const chatBox = document.getElementById('chatBox');
-    if (!chatBox) return;
-
-    const msgDiv = document.createElement('div');
-    msgDiv.classList.add('flex', 'w-full');
-
-    if (role === 'user') {
-        msgDiv.classList.add('justify-end');
-        msgDiv.innerHTML = `
-            <div class="bg-indigo-600 text-white p-3 rounded-2xl rounded-tr-none max-w-[85%] shadow-sm">
-                <p class="text-xs leading-relaxed whitespace-pre-wrap">${escapeHtml(text)}</p>
-            </div>
-        `;
-    } else {
-        const isError = role === 'error';
-        const borderColor = isError ? 'border-red-900/50' : 'border-gray-800';
-        const iconColor = isError ? 'text-red-400' : 'text-indigo-400';
-        const icon = isError ? 'fa-triangle-exclamation' : 'fa-robot';
-
-        let sqlHtml = '';
-        if (sql) {
-            sqlHtml = `
-                <div class="mt-2 pt-2 border-t border-gray-700/50">
-                    <p class="text-[10px] text-gray-500 mb-1 font-semibold uppercase">Executed Query:</p>
-                    <pre class="bg-black/40 p-2 rounded text-[10px] font-mono text-gray-400 overflow-x-auto whitespace-pre-wrap">${escapeHtml(sql)}</pre>
-                </div>
-            `;
-        }
-
-        // Parse markdown for AI responses, escape for errors.
-        // The AI's answer is built from database content — workflow names, node
-        // names, error messages — so raw HTML can reach here. marked emits HTML
-        // verbatim, which makes DOMPurify mandatory rather than belt-and-braces.
-        const formattedContent = isError
-            ? escapeHtml(text)
-            : window.renderMarkdownSafely(text);
-
-        msgDiv.classList.add('justify-start', 'gap-3', 'items-start');
-        msgDiv.innerHTML = `
-            <div class="bg-indigo-600/20 border border-indigo-500/30 w-8 h-8 shrink-0 flex items-center justify-center rounded-full mt-1">
-                <i class="fa-solid ${icon} fa-fw ${iconColor} text-sm"></i>
-            </div>
-            <div class="bg-n8n-card border ${borderColor} p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow-sm w-full prose-chat text-white">
-                <div class="text-xs leading-relaxed">${formattedContent}</div>
-                ${sqlHtml}
-            </div>
-        `;
-    }
-
-    chatBox.appendChild(msgDiv);
-    scrollToBottom();
-}
-
-function showTypingIndicator() {
-    const chatBox = document.getElementById('chatBox');
-    const id = 'typing-' + Date.now();
-    const msgDiv = document.createElement('div');
-    msgDiv.id = id;
-    msgDiv.classList.add('flex', 'gap-3', 'items-start', 'w-full');
-
-    msgDiv.innerHTML = `
-        <div class="bg-indigo-600/20 border border-indigo-500/30 w-8 h-8 shrink-0 flex items-center justify-center rounded-full mt-1">
-            <i class="fa-solid fa-robot fa-fw text-indigo-400 text-sm animate-pulse"></i>
-        </div>
-        <div class="bg-n8n-card border border-gray-800 p-3 rounded-2xl rounded-tl-none shadow-sm flex items-center gap-1">
-            <div class="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0ms"></div>
-            <div class="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 150ms"></div>
-            <div class="w-1.5 h-1.5 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 300ms"></div>
-        </div>
-    `;
-
-    if (chatBox) chatBox.appendChild(msgDiv);
-    scrollToBottom();
-    return id;
-}
-
-function removeMessage(id) {
-    const el = document.getElementById(id);
-    if (el) el.remove();
-}
-
-function scrollToBottom() {
-    const chatBox = document.getElementById('chatBox');
-    if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
-}
+// loadChatHistory, sendMessage, appendMessage, showTypingIndicator,
+// removeMessage and scrollToBottom lived here — about 160 lines, duplicated
+// almost line for line in chat.js. They are chat-core.js now, once.
 
 // escapeHtml lives in global_functions.js, loaded before this file.
 
@@ -344,7 +191,7 @@ if (window.visualViewport) {
         const widget = document.getElementById('chatWidget');
         if (widget && isChatOpen && window.innerWidth < 1024) {
             widget.style.height = `${window.visualViewport.height}px`;
-            setTimeout(scrollToBottom, 50);
+            setTimeout(() => chat?.scrollToBottom(), 50);
         }
     });
 

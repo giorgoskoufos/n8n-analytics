@@ -15,139 +15,152 @@
     <link rel="manifest" href="../assets/site.webmanifest">
     <link rel="stylesheet" href="../css/styles.css">
 </head>
-<body class="theme-errors p-4 md:p-8">
+<!--
+  `class="theme-errors"` is gone from the body.
+
+  It re-declared --n8n-success and --n8n-danger for this page alone, so "an
+  error is red" had two definitions that could — and did — drift apart. That is
+  F-24's acceptance criterion stated as a bug, and this page was the one place
+  it was literally true. This page now renders from the same tokens as the rest
+  of the dashboard.
+-->
+<body>
     <div class="max-w-7xl mx-auto">
-        <!-- Global Header -->
-        <div id="header-target" data-title="Error Intelligence" data-subtitle="Actionable failure diagnostics"></div>
+        <div id="header-target" data-title="Error Intelligence"
+             data-subtitle="Actionable failure diagnostics"
+             data-crumbs="Dashboard|../index.html, Error Intelligence"></div>
 
-        <!-- Time Range Controls -->
-        <div class="flex flex-col sm:flex-row justify-end items-center mb-8 gap-4 w-full">
-            <div id="presetRangeContainer" class="flex items-center gap-2">
-                <button id="btn24h" data-action="setErrorRange" data-arg="24"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">24h</button>
-                <button id="btn48h" data-action="setErrorRange" data-arg="48"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">48h</button>
-                <button id="btn7d" data-action="setErrorRange" data-arg="168"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">7d</button>
-                <button id="btn14d" data-action="setErrorRange" data-arg="336"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">14d</button>
-                <button id="btn30d" data-action="setErrorRange" data-arg="720"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-gray-800 rounded-lg text-[10px] text-gray-500 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-gray-300 transition-all duration-300">30d</button>
+        <!-- One filter row, above everything it scopes. -->
+        <div class="filter-bar mb-6">
+            <div id="presetRangeContainer" class="flex items-center gap-1.5" role="group" aria-label="Time range">
+                <button id="btn24h" data-action="setErrorRange" data-arg="24" class="chip" aria-pressed="false">24h</button>
+                <button id="btn48h" data-action="setErrorRange" data-arg="48" class="chip" aria-pressed="false">48h</button>
+                <button id="btn7d" data-action="setErrorRange" data-arg="168" class="chip" aria-pressed="true">7d</button>
+                <button id="btn14d" data-action="setErrorRange" data-arg="336" class="chip" aria-pressed="false">14d</button>
+                <button id="btn30d" data-action="setErrorRange" data-arg="720" class="chip" aria-pressed="false">30d</button>
             </div>
-            <div id="customRangeContainer"
-                class="flex items-center gap-3 h-[42px] bg-n8n-card border border-gray-800 rounded-lg px-4 py-2 w-full sm:w-auto hover:border-gray-700 transition-all duration-300">
-                <span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-0">Custom</span>
-                <div class="flex items-center gap-2">
-                    <input type="date" id="errorRangeStart"
-                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
-                    <span class="text-gray-600">—</span>
-                    <input type="date" id="errorRangeEnd"
-                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
-                </div>
+
+            <!--
+              F-24 §3 · The trigger-type filter this page never had.
+
+              This is not only a UI gap — it is the gap F-02 left. `?mode=` went
+              onto four endpoints and not onto getErrorIntelligence, so the
+              dashboard could say webhooks fail at 4.03% and schedules at 0.82%
+              and could not say which errors were whose.
+            -->
+            <div class="field">
+                <span class="label shrink-0">Trigger</span>
+                <select id="errorModeFilter" aria-label="Filter errors by trigger type">
+                    <option value="">Any trigger</option>
+                    <option value="webhook">Webhook</option>
+                    <option value="trigger">Schedule</option>
+                    <option value="manual">Manual</option>
+                    <option value="error">Error workflow</option>
+                    <option value="retry">Retry</option>
+                    <option value="integrated">Sub-workflow</option>
+                </select>
             </div>
+
+            <div id="customRangeContainer" class="field">
+                <span class="label shrink-0">Custom</span>
+                <input type="date" id="errorRangeStart" class="w-28" aria-label="Range start">
+                <span style="color:var(--ink-3)">—</span>
+                <input type="date" id="errorRangeEnd" class="w-28" aria-label="Range end">
+            </div>
+
+            <!-- Only shown while something is filtered. A permanently visible
+                 "clear filters" is a control that usually does nothing. -->
+            <button id="clearErrorFilters" data-action="clearErrorFilters" class="btn btn-sm" hidden>
+                <i class="fa-solid fa-xmark"></i> Clear filters
+            </button>
         </div>
 
-        <!-- KPI Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="kpiSection">
-            <!-- Total Failures -->
-            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
-                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Total Failures</p>
-                <div class="flex items-baseline gap-3">
-                    <h2 id="kpiTotalErrors" class="text-3xl font-bold text-n8n-danger">0</h2>
-                    <span id="kpiTrend" class="text-xs font-semibold px-2 py-0.5 rounded-full hidden"></span>
-                </div>
-                <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-bug text-4xl"></i></div>
-            </div>
-            <!-- Error Rate -->
-            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
-                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Error Rate</p>
-                <h2 id="kpiErrorRate" class="text-3xl font-bold text-white">0%</h2>
-                <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-chart-line text-4xl"></i></div>
-            </div>
-            <!-- Transient -->
-            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
-                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Self-healing <span class="text-[9px] text-gray-600">(measured)</span></p>
-                <h2 id="kpiTransient" class="text-3xl font-bold text-indigo-400">0</h2>
-                <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-rotate text-4xl"></i></div>
-            </div>
-            <!-- Needs Attention -->
-            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 relative overflow-hidden">
-                <p class="text-gray-400 text-[10px] uppercase font-bold tracking-widest mb-1">Needs Attention</p>
-                <h2 id="kpiStructural" class="text-3xl font-bold text-n8n-primary">0</h2>
-                <p id="kpiMislabelled" class="hidden text-[9px] text-amber-400/90 mt-1 relative z-10"></p>
-                <div class="absolute top-0 right-0 p-4 opacity-10"><i class="fa-solid fa-triangle-exclamation text-4xl"></i></div>
-            </div>
-        </div>
+        <!-- A filtered page that looks unfiltered is the same failure as an
+             empty chart that looks like a quiet day. -->
+        <p id="errorScopeNote" class="label mb-4" hidden></p>
 
-        <!-- Error Trend Timeline -->
-        <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 mb-8 h-80 flex flex-col">
-            <h3 class="text-sm font-semibold text-gray-400 mb-4">Error Trend by Category</h3>
-            <div class="flex-1 relative">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6" id="kpiSection"></div>
+
+        <div class="card card-pad mb-6 flex flex-col" style="min-height:22rem">
+            <div class="flex justify-between items-start mb-3 gap-3">
+                <div>
+                    <h2 class="card-title">Failures over time</h2>
+                    <p class="label mt-0.5">errors per day, by category · drag to zoom</p>
+                </div>
+            </div>
+            <div class="flex-1 relative" style="min-height:15rem">
                 <canvas id="trendChart"></canvas>
             </div>
+            <div id="deployCaption"></div>
+            <div id="trendTable"></div>
         </div>
 
-        <!-- Category Breakdown + Workflow Health -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-            <!-- Category Donut -->
-            <div class="bg-n8n-card p-6 rounded-xl border border-gray-800 h-[420px] flex flex-col">
-                <h3 class="text-sm font-semibold text-gray-400 mb-4">Error Categories</h3>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+            <div class="card card-pad flex flex-col" style="height:26rem">
+                <h2 class="card-title mb-3">Error categories</h2>
                 <div class="flex-1 relative min-h-0">
                     <canvas id="categoryChart"></canvas>
                 </div>
             </div>
 
-            <!-- Workflow Health Scores -->
-            <div class="lg:col-span-2 bg-n8n-card rounded-xl border border-gray-800 overflow-hidden flex flex-col h-[420px]">
-                <div class="p-4 border-b border-gray-800 bg-black/20">
-                    <h3 class="text-sm font-semibold text-gray-400">Workflow Health</h3>
+            <div class="lg:col-span-2 card card-clip flex flex-col" style="height:26rem">
+                <div class="card-head">
+                    <h2 class="card-title">Workflow health</h2>
+                    <span class="label">success rate over the range</span>
                 </div>
-                <div class="overflow-y-auto flex-1 custom-scrollbar">
-                    <table class="w-full text-left">
-                        <thead class="bg-black/40 sticky top-0 z-10">
-                            <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
-                                <th class="p-4">Workflow</th>
-                                <th class="p-4 text-center">Errors</th>
-                                <th class="p-4 text-center">Total Runs</th>
-                                <th class="p-4">Health</th>
+                <div class="tbl-wrap custom-scrollbar flex-1" id="healthTableWrap">
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Workflow</th>
+                                <th class="num">Errors</th>
+                                <th class="num">Total runs</th>
+                                <th style="width:36%">Health</th>
                             </tr>
                         </thead>
-                        <tbody id="healthTableBody" class="divide-y divide-gray-800/50">
-                            <tr><td colspan="4" class="p-8 text-center text-gray-500 text-sm italic">Loading...</td></tr>
-                        </tbody>
+                        <tbody id="healthTableBody"></tbody>
                     </table>
                 </div>
             </div>
         </div>
 
-        <!-- Deduplicated Error Groups -->
-        <div class="bg-n8n-card rounded-xl border border-gray-800 overflow-hidden mb-8">
-            <div class="p-4 border-b border-gray-800 bg-black/20 flex justify-between items-center">
-                <h3 class="text-sm font-bold text-gray-300">Error Groups</h3>
-                <span id="groupCount" class="text-[10px] text-gray-500 font-bold uppercase tracking-widest">0 groups</span>
+        <!--
+          F-24 §3 · Grouped by category, because that is what this table is.
+
+          It was a flat list with the Category column repeated line by line —
+          and a value repeated on every row is the clearest possible signal that
+          the value is really a heading. Sections now, with a per-category
+          total, collapsible.
+        -->
+        <div class="card card-clip mb-6" id="errorGroupsCard">
+            <div class="card-head">
+                <div>
+                    <h2 class="card-title">Error groups</h2>
+                    <p class="label mt-0.5">deduplicated by fingerprint (F-07)</p>
+                </div>
+                <span id="groupCount" class="label">0 groups</span>
             </div>
-            <div class="overflow-x-auto">
-                <table class="w-full text-left">
-                    <thead class="bg-black/40">
-                        <tr class="text-gray-500 text-[10px] uppercase tracking-wider font-bold">
-                            <th class="p-4 w-8"></th>
-                            <th class="p-4">Category</th>
-                            <th class="p-4">Failing Node</th>
-                            <th class="p-4">Error Message</th>
-                            <th class="p-4 text-center">Count</th>
-                            <th class="p-4 text-center">Workflows</th>
-                            <th class="p-4 text-right">Status</th>
+            <div class="tbl-wrap custom-scrollbar" style="max-height:80vh" id="errorGroupsWrap">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th style="width:32px"></th>
+                            <th>Failing node</th>
+                            <th>Error</th>
+                            <th class="num">Occurrences</th>
+                            <th class="num">Workflows</th>
+                            <th class="num">Status</th>
                         </tr>
                     </thead>
-                    <tbody id="errorGroupsBody" class="divide-y divide-gray-800/50">
-                        <tr><td colspan="7" class="p-12 text-center text-gray-500 text-sm italic">Loading error groups...</td></tr>
-                    </tbody>
+                    <tbody id="errorGroupsBody"></tbody>
                 </table>
             </div>
         </div>
     </div>
 
     <script src="../logic/global_functions.js"></script>
+    <script src="../logic/ui/components.js"></script>
+    <script src="../logic/ui/viz.js"></script>
     <script src="../logic/error-modal.js"></script>
     <script src="../logic/errors.js"></script>
     <script src="../logic/header.js"></script>

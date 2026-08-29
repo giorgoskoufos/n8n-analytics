@@ -1258,3 +1258,260 @@ test('the execution trace validates its id before reaching Postgres', async () =
     assert.equal(r.status, 500);
     assert.equal((await api('/api/analytics/slowest', { token: OWNER })).status, 200);
 });
+
+// ============================================ F-24 §4 · multi-header channels
+//
+// End to end, through the real API and a real receiving server: two headers are
+// stored, delivered, redacted on read-back, and — the part most likely to break
+// — a masked value submitted unchanged keeps ITS OWN stored secret rather than
+// a neighbour's.
+
+test('a channel delivers every custom header it was given', async () => {
+    sinkReceived.length = 0;
+
+    const created = await api('/api/alerts/channels', {
+        token: OWNER, method: 'POST',
+        body: {
+            name: 'two-header sink', type: 'webhook',
+            config: {
+                url: sinkUrl(),
+                headers: [
+                    { name: 'Authorization', value: 'Bearer alpha' },
+                    { name: 'X-Signature', value: 'sha256=beta' }
+                ]
+            }
+        }
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const channelId = created.body.id;
+
+    const test1 = await api(`/api/alerts/channels/${channelId}/test`, { token: OWNER, method: 'POST' });
+    assert.equal(test1.status, 200, JSON.stringify(test1.body));
+    assert.equal(sinkReceived.length, 1);
+
+    const got = sinkReceived[0];
+    assert.equal(got.headers.authorization, 'Bearer alpha');
+    assert.equal(got.headers['x-signature'], 'sha256=beta');
+    // The one header the dashboard owns must survive a config that never
+    // mentions it — the body is JSON and unparseable without it.
+    assert.equal(got.headers['content-type'], 'application/json');
+});
+
+test('header values are masked on read-back, and the names are not', async () => {
+    const list = await api('/api/alerts/channels', { token: OWNER });
+    const ch = list.body.find((c) => c.name === 'two-header sink');
+    assert.ok(ch, 'the channel should be listed');
+    assert.equal(ch.config.headers.length, 2);
+    for (const h of ch.config.headers) {
+        assert.ok(h.name, 'names travel so the form can show which headers exist');
+        assert.notEqual(h.value, 'Bearer alpha');
+        assert.notEqual(h.value, 'sha256=beta');
+    }
+    // And the URL, which is not a secret, comes back intact.
+    assert.equal(ch.config.url, sinkUrl());
+});
+
+test('editing one header keeps the others secret, matched by name not position', async () => {
+    sinkReceived.length = 0;
+    const list = await api('/api/alerts/channels', { token: OWNER });
+    const ch = list.body.find((c) => c.name === 'two-header sink');
+    const masked = ch.config.headers.find((h) => h.name === 'X-Signature').value;
+
+    // Submitted in the OPPOSITE order to how they are stored, with one edited
+    // and one left masked. If blank-means-keep resolved by index instead of by
+    // name, X-Signature would come back holding Authorization's secret.
+    const updated = await api(`/api/alerts/channels/${ch.id}`, {
+        token: OWNER, method: 'PUT',
+        body: {
+            name: 'two-header sink', type: 'webhook',
+            config: {
+                url: sinkUrl(),
+                headers: [
+                    { name: 'X-Signature', value: masked },
+                    { name: 'Authorization', value: 'Bearer GAMMA' }
+                ]
+            }
+        }
+    });
+    assert.equal(updated.status, 200, JSON.stringify(updated.body));
+
+    const test2 = await api(`/api/alerts/channels/${ch.id}/test`, { token: OWNER, method: 'POST' });
+    assert.equal(test2.status, 200, JSON.stringify(test2.body));
+    const got = sinkReceived[sinkReceived.length - 1];
+    assert.equal(got.headers.authorization, 'Bearer GAMMA', 'the edited header took its new value');
+    assert.equal(got.headers['x-signature'], 'sha256=beta', 'the untouched header kept its own secret');
+});
+
+test('removing every header actually removes them', async () => {
+    sinkReceived.length = 0;
+    const list = await api('/api/alerts/channels', { token: OWNER });
+    const ch = list.body.find((c) => c.name === 'two-header sink');
+
+    const updated = await api(`/api/alerts/channels/${ch.id}`, {
+        token: OWNER, method: 'PUT',
+        body: { name: 'two-header sink', type: 'webhook', config: { url: sinkUrl(), headers: [] } }
+    });
+    assert.equal(updated.status, 200);
+
+    await api(`/api/alerts/channels/${ch.id}/test`, { token: OWNER, method: 'POST' });
+    const got = sinkReceived[sinkReceived.length - 1];
+    assert.equal(got.headers.authorization, undefined);
+    assert.equal(got.headers['x-signature'], undefined);
+    assert.equal(got.headers['content-type'], 'application/json', 'ours still goes');
+});
+
+test('a reserved header is refused rather than quietly dropped', async () => {
+    const r = await api('/api/alerts/channels', {
+        token: OWNER, method: 'POST',
+        body: {
+            name: 'bad headers', type: 'webhook',
+            config: { url: sinkUrl(), headers: [{ name: 'Content-Type', value: 'text/plain' }] }
+        }
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /Content-Type/i);
+});
+
+// ============================================ F-24 §4 · cURL in and out
+
+test('a pasted curl fills in the URL and the headers', async () => {
+    const r = await api('/api/alerts/channels/parse-curl', {
+        token: OWNER, method: 'POST',
+        body: {
+            command: `curl -X POST '${sinkUrl()}' ` +
+                `-H 'Content-Type: application/json' -H 'Authorization: Bearer abc' -d '{"a":1}'`
+        }
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.url, sinkUrl());
+    // Content-Type is ours to set, so a pasted one is dropped with a note
+    // rather than refused — it is the commonest header in any curl example.
+    assert.deepEqual(r.body.headers, [{ name: 'Authorization', value: 'Bearer abc' }]);
+    assert.ok(r.body.notes.length, 'the dropped body and header should be reported, not silent');
+});
+
+test('a pasted curl aimed somewhere the server may not reach is refused at paste time', async () => {
+    // The same validateUrl every typed URL goes through. Refused here, where
+    // the person can still see what they pasted, rather than at save time.
+    const r = await api('/api/alerts/channels/parse-curl', {
+        token: OWNER, method: 'POST',
+        body: { command: 'curl -X POST http://169.254.169.254/latest/meta-data/' }
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /link-local/i);
+});
+
+test('a paste carrying a second shell command is refused, not half-read', async () => {
+    const r = await api('/api/alerts/channels/parse-curl', {
+        token: OWNER, method: 'POST',
+        body: { command: `curl ${sinkUrl()}; rm -rf /` }
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /unquoted/);
+});
+
+test('exporting a channel as curl never hands back a stored secret', async () => {
+    const created = await api('/api/alerts/channels', {
+        token: OWNER, method: 'POST',
+        body: {
+            name: 'export me', type: 'webhook',
+            config: { url: sinkUrl(), headers: [{ name: 'Authorization', value: 'Bearer TOPSECRET' }] }
+        }
+    });
+    assert.equal(created.status, 201);
+
+    const r = await api(`/api/alerts/channels/${created.body.id}/curl`, { token: OWNER });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.command.includes('curl'));
+    assert.ok(r.body.command.includes(sinkUrl()));
+    assert.ok(r.body.command.includes('Authorization'), 'the header name is useful and not secret');
+    assert.ok(!r.body.command.includes('TOPSECRET'),
+        'this API has never read a stored secret back, and a shell-shaped response is no exception');
+    assert.equal(r.body.redacted, true);
+    assert.match(r.body.note, /masked/i);
+});
+
+// ============================================ F-24 §3 · ?mode= on error intel
+
+test('the error page can be filtered by trigger type', async () => {
+    const all = await api('/api/analytics/error-intelligence', { token: OWNER });
+    assert.equal(all.status, 200);
+
+    const webhook = await api('/api/analytics/error-intelligence?mode=webhook', { token: OWNER });
+    assert.equal(webhook.status, 200, JSON.stringify(webhook.body));
+    assert.equal(webhook.body.mode, 'webhook', 'the applied filter is echoed so the page can say so');
+
+    // A filter can only ever narrow. This is the assertion that would catch the
+    // filter being attached to the wrong table or dropped from a query.
+    assert.ok(webhook.body.summary.total_errors <= all.body.summary.total_errors);
+    assert.ok(webhook.body.summary.total_executions <= all.body.summary.total_executions);
+    assert.ok(webhook.body.errorGroups.length <= all.body.errorGroups.length);
+});
+
+test('the error rate filters BOTH halves of its own ratio', async () => {
+    // The bug this guards is specific: filtering the numerator (errors) and not
+    // the denominator (executions) yields a rate that is wrong in the direction
+    // that looks reassuring — webhook errors over ALL runs.
+    const manual = await api('/api/analytics/error-intelligence?mode=manual', { token: OWNER });
+    assert.equal(manual.status, 200);
+    const all = await api('/api/analytics/error-intelligence', { token: OWNER });
+
+    if (manual.body.summary.total_errors > 0) {
+        assert.ok(manual.body.summary.total_executions < all.body.summary.total_executions,
+            'the denominator must narrow with the filter, not stay at the unfiltered total');
+    }
+});
+
+test('an unknown trigger type is a 400, not an empty page', async () => {
+    // An empty chart is indistinguishable from a quiet day; a 400 is what tells
+    // the two apart. Same reasoning as the four endpoints F-02 already covered.
+    const r = await api('/api/analytics/error-intelligence?mode=cron', { token: OWNER });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /Unknown execution mode/);
+});
+
+test('the drill-down under a group carries the same trigger filter as the group', async () => {
+    const list = await api('/api/analytics/error-intelligence?mode=webhook', { token: OWNER });
+    const group = list.body.errorGroups[0];
+    if (!group) return;   // no errors in the fixture window — nothing to assert
+
+    const drill = await api('/api/analytics/error-group-executions', {
+        token: OWNER, method: 'POST',
+        body: {
+            fingerprint: group.fingerprint,
+            startDate: new Date(Date.now() - 30 * 86400000).toISOString(),
+            endDate: new Date().toISOString(),
+            mode: 'webhook'
+        }
+    });
+    assert.equal(drill.status, 200, JSON.stringify(drill.body));
+
+    const bad = await api('/api/analytics/error-group-executions', {
+        token: OWNER, method: 'POST',
+        body: {
+            fingerprint: group.fingerprint,
+            startDate: new Date(Date.now() - 30 * 86400000).toISOString(),
+            endDate: new Date().toISOString(),
+            mode: 'not-a-mode'
+        }
+    });
+    assert.equal(bad.status, 400, 'the drill-down validates the mode like every other endpoint');
+});
+
+// ============================================ F-24 §5 · trace on the Slowest tab
+
+test('the slowest list carries an execution to open a trace on', async () => {
+    const r = await api('/api/analytics/slowest', { token: OWNER });
+    assert.equal(r.status, 200);
+    if (!r.body.length) return;   // nothing finished in the fixture window
+
+    for (const row of r.body) {
+        assert.ok('slowest_exec_id' in row, 'every row needs something the trace panel can open');
+        assert.ok('max_duration' in row,
+            'and its worst run, so an average dragged up by one outlier can be told from a uniformly slow workflow');
+        if (row.max_duration !== null && row.avg_duration !== null) {
+            assert.ok(row.max_duration >= row.avg_duration - 1e-9,
+                'the maximum cannot be below the mean');
+        }
+    }
+});

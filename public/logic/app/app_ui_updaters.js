@@ -17,45 +17,44 @@ window.updateKpiCards = function(summary) {
     if (elTime) elTime.innerText = avgTime + 's';
     ['kpiSk1', 'kpiSk2', 'kpiSk3'].forEach(id => document.getElementById(id)?.classList.add('done'));
 
-    // Update Trend Badges
-    const trendTotalEl = document.getElementById('trendTotal');
-    const trendErrorEl = document.getElementById('trendError');
+    // Trend badges, through the shared component.
+    //
+    // These were two near-identical blocks that each added and removed six
+    // Tailwind classes by hand, and they disagreed about the same thing in
+    // opposite directions on purpose: executions falling is bad, errors falling
+    // is good. That polarity is the only real difference between them, so it is
+    // the only thing stated here — `goodWhenDown` — and the colours come from
+    // the status tokens rather than from twelve class names typed twice.
+    const paintTrend = (elId, pct, opts) => {
+        const el = document.getElementById(elId);
+        if (!el || pct === undefined) return;
+        const html = window.UI.trend(parseFloat(pct).toFixed(1), opts);
+        el.classList.toggle('hidden', !html);
+        el.innerHTML = html;
+    };
 
-    if (trendTotalEl && summary.trend_total_pct !== undefined) {
-        const pct = parseFloat(summary.trend_total_pct);
-        trendTotalEl.classList.remove('hidden', 'bg-green-900/30', 'text-green-400', 'bg-red-900/30', 'text-red-400', 'bg-gray-800', 'text-gray-400');
-        if (pct > 0) {
-            trendTotalEl.classList.add('bg-green-900/30', 'text-green-400');
-            trendTotalEl.innerText = `+${pct.toFixed(1)}%`;
-        } else if (pct < 0) {
-            trendTotalEl.classList.add('bg-red-900/30', 'text-red-400');
-            trendTotalEl.innerText = `${pct.toFixed(1)}%`;
-        } else {
-            trendTotalEl.classList.add('bg-gray-800', 'text-gray-400');
-            trendTotalEl.innerText = `0%`;
-        }
-    }
-
-    if (trendErrorEl && summary.trend_error_pct !== undefined) {
-        const pct = parseFloat(summary.trend_error_pct);
-        trendErrorEl.classList.remove('hidden', 'bg-green-900/30', 'text-green-400', 'bg-red-900/30', 'text-red-400', 'bg-gray-800', 'text-gray-400');
-        if (pct < 0) {
-            // Negative error trend is GOOD (Green)
-            trendErrorEl.classList.add('bg-green-900/30', 'text-green-400');
-            trendErrorEl.innerText = `${pct.toFixed(1)}%`;
-        } else if (pct > 0) {
-            // Positive error trend is BAD (Red)
-            trendErrorEl.classList.add('bg-red-900/30', 'text-red-400');
-            trendErrorEl.innerText = `+${pct.toFixed(1)}%`;
-        } else {
-            trendErrorEl.classList.add('bg-gray-800', 'text-gray-400');
-            trendErrorEl.innerText = `0%`;
-        }
-    }
+    paintTrend('trendTotal', summary.trend_total_pct, {
+        title: 'Compared with the preceding period of the same length'
+    });
+    paintTrend('trendError', summary.trend_error_pct, {
+        goodWhenDown: true,
+        title: 'Compared with the preceding period of the same length'
+    });
 }
 
 window.updateLineChart = function(chartData) {
-    if (!chartData || chartData.length === 0) return;
+    // An empty response and a quiet period are different facts, and the chart
+    // used to render them identically — by returning early and leaving whatever
+    // was on the canvas, or on first load an empty grid that reads as measured
+    // zero. It now says which one it is.
+    if (!chartData || chartData.length === 0) {
+        window.Viz.setEmpty(window.lineChart, false, 'No executions in this range',
+            'Nothing ran between these dates — this is an absence, not a count of zero.');
+        window.lineChart?.update();
+        document.getElementById('lineChartSk')?.classList.add('done');
+        return;
+    }
+    window.Viz.setEmpty(window.lineChart, true);
 
     const labels = [];
     const successData = [];
@@ -92,60 +91,89 @@ window.updateLineChart = function(chartData) {
     document.getElementById('lineChartSk')?.classList.add('done');
 }
 
+/**
+ * Marks which time range is in force.
+ *
+ * The selected preset used to be a `.filter-active-glow` class — a green wash
+ * that said nothing to assistive technology, so a screen-reader user could not
+ * tell which of the three ranges the numbers on the page described. The state
+ * lives on `aria-pressed` now and the CSS reads it, so there is one fact rather
+ * than a visual claim and an invisible one that can drift apart.
+ */
 window.updateActiveFilterStyles = function() {
-    const btn24h = document.getElementById('btn24h');
-    const btn48h = document.getElementById('btn48h');
-    const btn7d = document.getElementById('btn7d');
-    const customContainer = document.getElementById('customRangeContainer');
+    const byPreset = { 24: 'btn24h', 48: 'btn48h', 168: 'btn7d' };
+    const activeId = byPreset[window.lastPresetHours];
 
-    // Remove all states
-    [btn24h, btn48h, btn7d, customContainer].forEach(el => {
-        el?.classList.remove('filter-active-glow', 'filter-loading-pulse');
+    Object.values(byPreset).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.setAttribute('aria-pressed', String(id === activeId));
     });
 
-    // Apply solid glow to active
-    if (window.lastPresetHours === 24) btn24h?.classList.add('filter-active-glow');
-    else if (window.lastPresetHours === 48) btn48h?.classList.add('filter-active-glow');
-    else if (window.lastPresetHours === 168) btn7d?.classList.add('filter-active-glow');
-    else {
-        // If no preset, custom container is active
-        customContainer?.classList.add('filter-active-glow');
-    }
+    // No preset means the custom range is what is in force.
+    const custom = document.getElementById('customRangeContainer');
+    if (custom) custom.classList.toggle('filter-active-glow', !activeId);
 }
 
+/**
+ * Top workflows.
+ *
+ * Two things were wrong here and they are the same thing twice.
+ *
+ * The palette was six literal hexes indexed by ROW POSITION
+ * (`colors[index % colors.length]`), so the colour a workflow got depended on
+ * how it happened to rank in the current filter. Change the date range, and the
+ * workflow that was coral is now green — while the reader is still holding
+ * "coral is the invoice sync" in their head. Colour has to follow the entity,
+ * and `Viz.colorFor` keys it on the workflow name for exactly that reason.
+ *
+ * And `% colors.length` meant a seventh workflow silently reused the first
+ * colour. Two slices, identical hue, no indication. The tail folds into "Other"
+ * now — past eight slots no palette can keep the pairs apart under
+ * colour-vision deficiency, so generating a ninth colour is not a smaller
+ * problem than admitting the cap.
+ */
 window.updateDoughnutChart = function(workflows) {
-    if (!workflows || workflows.length === 0) return;
+    if (!workflows || workflows.length === 0) {
+        window.Viz.setEmpty(window.doughnutChart, false, 'No workflows ran',
+            'No execution in this range belongs to a workflow that still exists.');
+        window.doughnutChart?.update();
+        document.getElementById('doughnutSk')?.classList.add('done');
+        return;
+    }
+    window.Viz.setEmpty(window.doughnutChart, true);
 
+    const MAX_SLICES = 8;
     let cumulativePercentage = 0;
     const labels = [];
     const dataValues = [];
     let restCount = 0;
+    let restWorkflows = 0;
 
     workflows.forEach(wf => {
         const pct = parseFloat(wf.percentage);
         const count = parseInt(wf.execution_count);
 
-        if (cumulativePercentage < 90) {
+        if (cumulativePercentage < 90 && labels.length < MAX_SLICES) {
             labels.push(wf.workflow_name);
             dataValues.push(count);
             cumulativePercentage += pct;
         } else {
             restCount += count;
+            restWorkflows += 1;
         }
     });
 
+    const REST = restWorkflows === 1 ? 'Other (1 workflow)' : `Other (${restWorkflows} workflows)`;
     if (restCount > 0) {
-        labels.push('Rest Workflows');
+        labels.push(REST);
         dataValues.push(restCount);
     }
 
     window.doughnutChart.data.labels = labels;
     window.doughnutChart.data.datasets[0].data = dataValues;
-
-    const colors = ['#ff6f5c', '#00c07f', '#ff9f43', '#00b8d9', '#6554c0', '#f16a75'];
-    const backgroundColors = labels.map((label, index) => label === 'Rest Workflows' ? '#374151' : colors[index % colors.length]);
-
-    window.doughnutChart.data.datasets[0].backgroundColor = backgroundColors;
+    window.doughnutChart.data.datasets[0].backgroundColor = labels.map(label =>
+        label === REST ? window.Viz.tokens().surface3 : window.Viz.colorFor('workflow', label)
+    );
     window.doughnutChart.update();
     document.getElementById('doughnutSk')?.classList.add('done');
 }
@@ -192,8 +220,40 @@ window.updateConcurrencyChart = function(data) {
 
     window.concurrencyChart.data.labels = processedLabels;
     window.concurrencyChart.data.datasets[0].data = processedData;
+
+    // F-24 §1, the axis bug.
+    //
+    // The item is explicit that the ask is NOT "a smaller max" — that crops the
+    // peak, which is lying in the other direction. It is that the rule must not
+    // be hidden by the exception. So: clamp the axis to the 98th percentile so
+    // the body of the distribution uses the full height, mark every column that
+    // was clipped with a caret, and print how many there are and how high the
+    // real peak goes. A well-behaved series gets no clamp and no caveat — the
+    // helper returns `max: null` and the axis simply fits.
+    const clamp = window.Viz.clampMax(processedData);
+    window.concurrencyChart.options.scales.y.max = clamp.max ?? undefined;
+    window.concurrencyChart.options.plugins.outlierMarks = clamp.max
+        ? { max: clamp.max, clipped: clamp.clipped, peak: clamp.peak, unit: 'count' }
+        : { max: null };
+
+    window.Viz.setEmpty(window.concurrencyChart, processedData.length > 0,
+        'No executions started here',
+        'No run began in this window. A flat line at zero would be a measurement; this is not one.');
+
     window.concurrencyChart.update();
     document.getElementById('concurrencySk')?.classList.add('done');
+
+    // The table-view twin — every value reachable without hovering the right
+    // pixel, which is both the accessibility requirement and the fastest way to
+    // answer "what exactly was that spike".
+    const host = document.getElementById('concurrencyTable');
+    if (host) {
+        host.innerHTML = window.Viz.tableFor(window.concurrencyChart, {
+            unit: 'count',
+            axisLabel: 'Bucket start',
+            labelFormat: { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+        });
+    }
 }
 
 window.fetchConcurrencyDetails = async function(timestamp, windowSize = 5) {
@@ -203,7 +263,7 @@ window.fetchConcurrencyDetails = async function(timestamp, windowSize = 5) {
 
     if (!modal) return;
 
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-gray-500 italic">Fetching executions starting at ${escapeHtml(timestamp)}...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-ink-3 italic">Fetching executions starting at ${escapeHtml(timestamp)}...</td></tr>`;
 
     // Display range in subtitle
     const startDate = new Date(timestamp);
@@ -225,7 +285,7 @@ window.fetchConcurrencyDetails = async function(timestamp, windowSize = 5) {
         const data = await response.json();
 
         if (data.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-gray-500 italic">No executions found precisely at this 5m interval.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-ink-3 italic">No executions found precisely at this 5m interval.</td></tr>`;
             return;
         }
 
@@ -256,11 +316,11 @@ window.fetchConcurrencyDetails = async function(timestamp, windowSize = 5) {
             }
 
             return `
-            <tr class="hover:bg-gray-800/30 transition-colors border-b border-gray-800/50">
+            <tr class="hover:bg-gray-800/30 transition-colors border-b border-line/50">
                 <td class="p-4 text-white font-semibold text-sm truncate max-w-[200px]">${escapeHtml(exec.workflow_name)}</td>
                 <td class="p-4"><span class="${statusColor} text-[10px] font-bold uppercase tracking-tight"><i class="fa-solid ${statusIcon} mr-1"></i> ${escapeHtml(exec.status)}</span></td>
-                <td class="p-4 text-gray-400 text-xs">${escapeHtml(timeString)}</td>
-                <td class="p-4 text-gray-500 text-[10px] font-mono">${escapeHtml(durationStr)}</td>
+                <td class="p-4 text-ink-2 text-xs">${escapeHtml(timeString)}</td>
+                <td class="p-4 text-ink-3 text-[10px] font-mono">${escapeHtml(durationStr)}</td>
                 <td class="p-4 text-right">
                     ${actionBtn}
                 </td>
@@ -369,61 +429,63 @@ window.applyExecFilters = function() {
 window.initExecutionsHeader = function() {
     const thead = document.getElementById('tableHeader') || document.getElementById('table-head');
     if (!thead) return;
+
+    // One control style, from the token layer, instead of a 180-character
+    // Tailwind class string re-typed at every input (F-24 §7). The filter row
+    // was rendering as a run of mismatched boxes and two stacked 22px buttons
+    // for exactly this reason: nothing here had ever been decided in one place.
+    const CTL = 'width:100%;background:var(--surface-0);border:1px solid var(--line);' +
+        'border-radius:var(--r-sm);padding:.3rem .5rem;font-size:11px;color:var(--ink-1)';
+
     thead.innerHTML = `
-        <tr class="text-gray-400 text-xs uppercase tracking-widest border-b border-gray-800/50">
-            <th class="px-4 pt-3 pb-1 font-medium text-gray-600">#</th>
-            <th class="px-4 pt-3 pb-1 font-medium">Workflow</th>
-            <th class="px-4 pt-3 pb-1 font-medium">Status</th>
-            <th class="px-4 pt-3 pb-1 font-medium">Started</th>
-            <th class="px-4 pt-3 pb-1 font-medium">Ended</th>
-            <th class="px-4 pt-3 pb-1 font-medium">Run Time</th>
-            <th class="px-4 pt-3 pb-1 font-medium"></th>
+        <tr>
+            <th style="width:90px">#</th>
+            <th>Workflow</th>
+            <th style="width:130px">Status</th>
+            <th style="width:170px">Started</th>
+            <th style="width:170px">Ended</th>
+            <th class="num" style="width:120px">Run time</th>
+            <th style="width:86px"></th>
         </tr>
-        <tr class="bg-black/20 border-b border-gray-800/50">
-            <td class="px-3 py-3">
-                <input type="number" id="execIdFilter" min="1" placeholder="ID…"
-                    class="bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 w-16 text-center" />
-            </td>
-            <td class="px-3 py-3">
-                <select id="execWorkflowFilter"
-                    class="bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 w-full max-w-[180px] cursor-pointer">
-                    <option value="">All Workflows</option>
+        <tr class="filter-row">
+            <td><input type="number" id="execIdFilter" min="1" placeholder="ID…" aria-label="Filter by execution id" style="${CTL}"></td>
+            <td>
+                <select id="execWorkflowFilter" aria-label="Filter by workflow" style="${CTL}">
+                    <option value="">All workflows</option>
                 </select>
             </td>
-            <td class="px-3 py-3">
-                <select id="execStatusFilter"
-                    class="bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 w-full cursor-pointer">
-                    <option value="">Any Status</option>
+            <td>
+                <select id="execStatusFilter" aria-label="Filter by status" style="${CTL}">
+                    <option value="">Any status</option>
                     <option value="success">Success</option>
                     <option value="error">Error</option>
                     <option value="canceled">Canceled</option>
                     <option value="crashed">Crashed</option>
                 </select>
             </td>
-            <td class="px-3 py-3">
-                <input type="text" id="execStartFilter" placeholder="DD/MM/YYYY HH:mm"
-                    class="bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 font-mono w-36" />
-            </td>
-            <td class="px-3 py-3">
-                <input type="text" id="execEndFilter" placeholder="DD/MM/YYYY HH:mm"
-                    class="bg-black/40 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 font-mono w-36" />
-            </td>
-            <td class="px-3 py-3">
-                <div class="flex items-center gap-1">
-                    <span class="text-gray-600 text-[10px]">&gt;</span>
+            <td><input type="text" id="execStartFilter" placeholder="DD/MM/YYYY HH:mm"
+                       aria-label="Started after" class="mono" style="${CTL}"></td>
+            <td><input type="text" id="execEndFilter" placeholder="DD/MM/YYYY HH:mm"
+                       aria-label="Ended before" class="mono" style="${CTL}"></td>
+            <td>
+                <div class="flex items-center gap-1.5">
+                    <span class="label shrink-0">&gt;</span>
                     <input type="number" id="execMinDurFilter" min="0" step="0.1" placeholder="—"
-                        class="bg-black/40 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-300 focus:outline-none focus:border-indigo-500 w-12 text-center" />
-                    <span class="text-gray-600 text-[10px]">s</span>
+                           aria-label="Minimum run time in seconds" style="${CTL};text-align:right">
+                    <span class="label shrink-0">s</span>
                 </div>
             </td>
-            <td class="px-3 py-3">
-                <div class="flex flex-col items-center gap-1">
-                    <button data-action="applyExecFilters" title="Apply filters"
-                        class="w-[26px] h-[22px] text-[9px] bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 hover:bg-indigo-600/50 hover:border-indigo-400/60 active:bg-indigo-600/70 transition-colors rounded flex items-center justify-center">
+            <td>
+                <!-- Side by side, not stacked. Two 22px-tall buttons in a
+                     vertical stack were both below the minimum comfortable hit
+                     target and unreadable as a pair. -->
+                <div class="flex items-center gap-1.5">
+                    <button data-action="applyExecFilters" title="Apply filters" aria-label="Apply filters"
+                            class="btn btn-sm" style="padding:0 .45rem">
                         <i class="fa-solid fa-check"></i>
                     </button>
-                    <button data-action="clearExecFilters" title="Clear all filters"
-                        class="w-[26px] h-[22px] text-[9px] bg-gray-700/20 border border-gray-600/30 text-gray-400 hover:bg-n8n-primary/20 hover:border-n8n-primary/40 hover:text-n8n-primary active:bg-n8n-primary/30 active:border-n8n-primary/60 transition-colors rounded flex items-center justify-center">
+                    <button data-action="clearExecFilters" title="Clear all filters" aria-label="Clear all filters"
+                            class="btn btn-sm" style="padding:0 .45rem">
                         <i class="fa-solid fa-xmark"></i>
                     </button>
                 </div>

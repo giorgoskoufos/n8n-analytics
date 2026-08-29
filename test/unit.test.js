@@ -714,3 +714,488 @@ test('the step list has no duplicates and no gaps', () => {
         assert.ok(entry[1].length > 0, 'every step needs a human label');
     }
 });
+
+// ============================================================ alert headers
+//
+// F-24 §4. Channels were limited to exactly one custom header pair, so an
+// endpoint needing both `Authorization` and `X-Signature` could not be
+// configured at all. The list replaces it — and the part worth testing is not
+// "can it hold two", it is that per-row blank-means-keep resolves by NAME, so
+// reordering or renaming a row cannot move one header's secret onto another.
+
+const {
+    validateChannel, validateHeaders, readHeaders, redactConfig, SECRET_MASK, MAX_HEADERS
+} = require(path.join(ROOT, 'src/utils/alertValidation'));
+
+const channel = (config, existing) =>
+    validateChannel({ name: 'sink', type: 'webhook', config }, existing);
+
+test('a channel can carry more than one custom header', () => {
+    const r = channel({
+        url: 'https://example.com/hook',
+        headers: [
+            { name: 'Authorization', value: 'Bearer abc' },
+            { name: 'X-Signature', value: 'sha256=deadbeef' }
+        ]
+    });
+    assert.ok(r.ok, r.error);
+    assert.deepEqual(r.value.config.headers, [
+        { name: 'Authorization', value: 'Bearer abc' },
+        { name: 'X-Signature', value: 'sha256=deadbeef' }
+    ]);
+});
+
+test('the legacy header_name/header_value pair is folded in, never dropped', () => {
+    // Silently ignoring it would create a channel that reports success and then
+    // delivers without its auth header — a broken integration wearing the look
+    // of a working one.
+    const r = channel({
+        url: 'https://example.com/hook',
+        header_name: 'X-Token', header_value: 's3cret'
+    });
+    assert.ok(r.ok, r.error);
+    assert.deepEqual(r.value.config.headers, [{ name: 'X-Token', value: 's3cret' }]);
+});
+
+test('readHeaders understands a config stored in the old shape', () => {
+    // Existing rows in the database still hold the pair. They must keep
+    // delivering without a migration that could lose a secret.
+    assert.deepEqual(readHeaders({ header_name: 'X-Token', header_value: 's3cret' }),
+        [{ name: 'X-Token', value: 's3cret' }]);
+    assert.deepEqual(readHeaders({}), []);
+    assert.deepEqual(readHeaders(null), []);
+});
+
+test('every header value is redacted, and the names are not', () => {
+    // The names have to travel in clear or the form cannot show which headers
+    // exist, and nobody could edit one without retyping all of them.
+    const out = redactConfig('webhook', {
+        url: 'https://example.com/hook',
+        headers: [{ name: 'Authorization', value: 'Bearer abc' }, { name: 'X-Signature', value: 'sig' }]
+    });
+    assert.deepEqual(out.headers, [
+        { name: 'Authorization', value: SECRET_MASK },
+        { name: 'X-Signature', value: SECRET_MASK }
+    ]);
+    assert.equal(out.url, 'https://example.com/hook');
+});
+
+test('a blank value keeps the stored one for THAT row, matched by name', () => {
+    // The bug this guards: with a single pair, "empty means keep" could key off
+    // the one field. With a list it must key off the row, and an index is not a
+    // row identity — the form can reorder.
+    const existing = {
+        headers: [
+            { name: 'Authorization', value: 'Bearer abc' },
+            { name: 'X-Signature', value: 'sig-original' }
+        ]
+    };
+    const r = channel({
+        url: 'https://example.com/hook',
+        headers: [
+            // Deliberately in the opposite order, and one is edited.
+            { name: 'X-Signature', value: SECRET_MASK },
+            { name: 'Authorization', value: 'Bearer NEW' }
+        ]
+    }, existing);
+    assert.ok(r.ok, r.error);
+    const byName = Object.fromEntries(r.value.config.headers.map((h) => [h.name, h.value]));
+    assert.equal(byName['X-Signature'], 'sig-original', 'the untouched row kept its own secret');
+    assert.equal(byName.Authorization, 'Bearer NEW', 'the edited row took the new value');
+});
+
+test('a blank value on a header that does not exist yet is refused', () => {
+    // Rather than silently storing an empty header, which would be sent as a
+    // present-but-empty header and read very differently at the far end.
+    const r = channel({
+        url: 'https://example.com/hook',
+        headers: [{ name: 'X-New', value: '' }]
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /X-New/);
+});
+
+test('reserved headers cannot be overridden', () => {
+    for (const name of ['Content-Type', 'content-length', 'Host']) {
+        const r = channel({ url: 'https://example.com/hook', headers: [{ name, value: 'x' }] });
+        assert.equal(r.ok, false, `${name} should be refused`);
+    }
+});
+
+test('a header value cannot contain a line break', () => {
+    // CRLF in a value is how one request becomes two at the receiving end.
+    const r = channel({
+        url: 'https://example.com/hook',
+        headers: [{ name: 'X-Evil', value: 'a\r\nX-Injected: b' }]
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /line break/);
+});
+
+test('an invalid header name is refused', () => {
+    for (const name of ['Bad Header', 'has:colon', 'nl\nname', '']) {
+        const r = validateHeaders([{ name, value: 'x' }], []);
+        // The empty name with a value present is a named error too, not a skip.
+        assert.equal(r.ok, false, `${JSON.stringify(name)} should be refused`);
+    }
+});
+
+test('a wholly blank row is dropped rather than reported as an error', () => {
+    // It is what the "add header" button leaves behind before anything is typed.
+    const r = validateHeaders([{ name: '', value: '' }, { name: 'X-A', value: '1' }], []);
+    assert.ok(r.ok, r.error);
+    assert.deepEqual(r.value, [{ name: 'X-A', value: '1' }]);
+});
+
+test('the same header cannot be listed twice', () => {
+    const r = validateHeaders([{ name: 'X-A', value: '1' }, { name: 'x-a', value: '2' }], []);
+    assert.equal(r.ok, false);
+});
+
+test('the header list is bounded', () => {
+    const many = Array.from({ length: MAX_HEADERS + 1 }, (_, i) => ({ name: `X-${i}`, value: 'v' }));
+    assert.equal(validateHeaders(many, []).ok, false);
+    const ok = many.slice(0, MAX_HEADERS);
+    assert.equal(validateHeaders(ok, []).ok, true);
+});
+
+// ============================================================ cURL parsing
+//
+// F-24 §4 warns about exactly one thing here: a cURL command off the clipboard
+// is user input that LOOKS like a command. It is parsed by us, never handed to
+// a shell, and the URL it yields goes through the same SSRF check as every
+// other channel URL.
+
+const { parseCurl } = require(path.join(ROOT, 'src/utils/curl'));
+
+test('parseCurl reads the URL, method and headers of a normal command', () => {
+    const r = parseCurl(`curl -X POST 'https://example.com/hook' \\
+        -H 'Authorization: Bearer abc' \\
+        -H "X-Signature: sha256=deadbeef" \\
+        -d '{"a":1}'`);
+    assert.ok(r.ok, r.error);
+    assert.equal(r.value.url, 'https://example.com/hook');
+    assert.equal(r.value.method, 'POST');
+    assert.deepEqual(r.value.headers, [
+        { name: 'Authorization', value: 'Bearer abc' },
+        { name: 'X-Signature', value: 'sha256=deadbeef' }
+    ]);
+});
+
+test('parseCurl accepts a bare URL and the --long forms', () => {
+    const r = parseCurl('curl --request POST --header "X-A: 1" --url https://example.com/x');
+    assert.ok(r.ok, r.error);
+    assert.equal(r.value.url, 'https://example.com/x');
+    assert.deepEqual(r.value.headers, [{ name: 'X-A', value: '1' }]);
+});
+
+test('a paste with a shell operator in it is refused, not half-accepted', () => {
+    // Nothing here executes, so this is not about injection. It is about the
+    // quieter failure the first draft had: `curl https://example.com/x; rm -rf /`
+    // parses fine and `new URL()` keeps the semicolon, producing a channel
+    // silently pointed at `https://example.com/x;`. A wrong URL that looks
+    // right is worse than an error message.
+    const nasty = [
+        'curl https://example.com/x; rm -rf /',
+        'curl $(whoami).example.com',
+        'curl `id`.example.com',
+        'curl https://example.com/x && cat /etc/passwd',
+        'curl https://example.com/x > /tmp/out'
+    ];
+    for (const cmd of nasty) {
+        const r = parseCurl(cmd);
+        assert.equal(r.ok, false, `${cmd} should be refused outright`);
+        assert.match(r.error, /unquoted/);
+    }
+});
+
+test('a quoted shell character is content, not an operator', () => {
+    // `&` between query parameters is ordinary and must survive.
+    const r = parseCurl(`curl 'https://example.com/x?a=1&b=2' -H 'X-A: a;b'`);
+    assert.ok(r.ok, r.error);
+    assert.equal(r.value.url, 'https://example.com/x?a=1&b=2');
+    assert.deepEqual(r.value.headers, [{ name: 'X-A', value: 'a;b' }]);
+});
+
+test('parseCurl refuses input that is not a curl command at all', () => {
+    for (const bad of ['', 'wget https://example.com', 'https://example.com', 'curl', null]) {
+        assert.equal(parseCurl(bad).ok, false, `${JSON.stringify(bad)} should be refused`);
+    }
+});
+
+test('parseCurl refuses a header with no colon rather than guessing', () => {
+    assert.equal(parseCurl('curl https://e.com -H "NotAHeader"').ok, false);
+});
+
+test('toCurl round-trips through parseCurl', () => {
+    const { toCurl } = require(path.join(ROOT, 'src/utils/curl'));
+    const cmd = toCurl({
+        url: 'https://example.com/hook',
+        headers: [{ name: 'Authorization', value: 'Bearer abc' }]
+    });
+    const back = parseCurl(cmd);
+    assert.ok(back.ok, back.error);
+    assert.equal(back.value.url, 'https://example.com/hook');
+    // Content-Type is always emitted: the dashboard only ever POSTs JSON, and a
+    // command exported for someone to try in a terminal has to reproduce the
+    // real request rather than a simplified one.
+    assert.deepEqual(back.value.headers, [
+        { name: 'Content-Type', value: 'application/json' },
+        { name: 'Authorization', value: 'Bearer abc' }
+    ]);
+});
+
+test('toCurl quotes a value that would otherwise break out of its quotes', () => {
+    const { toCurl } = require(path.join(ROOT, 'src/utils/curl'));
+    const cmd = toCurl({
+        url: 'https://example.com/hook',
+        headers: [{ name: 'X-Q', value: "it's \"quoted\"" }]
+    });
+    // Single quotes inside a single-quoted shell word are the classic escape,
+    // and the generated command is something a person pastes into a terminal.
+    assert.ok(!/'[^']*'[^']*'\s*$/.test(cmd) || cmd.includes(`'\\''`),
+        'a single quote in a value must be escaped for the shell');
+    const back = parseCurl(cmd);
+    assert.ok(back.ok, back.error);
+    assert.deepEqual(back.value.headers, [
+        { name: 'Content-Type', value: 'application/json' },
+        { name: 'X-Q', value: "it's \"quoted\"" }
+    ]);
+});
+
+// ============================================== F-24 §6 · streamed AI answers
+//
+// The pipeline is two model calls and a query; only the second call produces
+// its output gradually, so that is what streams. What is worth testing is not
+// OpenAI — it is our framing and our ordering:
+//
+//   · the SQL is emitted BEFORE the answer, so a reader can see what was asked
+//     of the database while the prose is still arriving;
+//   · a guard refusal after the headers are sent arrives as an `error` EVENT,
+//     because the status line is already 200 and cannot say anything any more;
+//   · a client that disconnects mid-answer does not get a half-sentence
+//     written into its history, where the next turn would feed it back to the
+//     model as something it supposedly said.
+//
+// The provider is stubbed through the require cache. Nothing here reaches the
+// network, and nothing here needs an API key.
+
+const Module = require('node:module');
+
+/** Installs a fake `src/config/openai` and returns a fresh aiController. */
+function withStubbedModel(replies) {
+    const openaiPath = require.resolve(path.join(ROOT, 'src/config/openai'));
+    const controllerPath = require.resolve(path.join(ROOT, 'src/controllers/aiController'));
+
+    const calls = [];
+    const stub = {
+        chat: {
+            completions: {
+                create: async (args) => {
+                    calls.push(args);
+                    const reply = replies[calls.length - 1];
+                    if (reply && reply.throws) throw new Error(reply.throws);
+                    if (args.stream) {
+                        return (async function* () {
+                            for (const piece of reply.chunks) {
+                                yield { choices: [{ delta: { content: piece } }] };
+                            }
+                        })();
+                    }
+                    return { choices: [{ message: { content: reply.content } }] };
+                }
+            }
+        }
+    };
+
+    // Seed the cache with the stub, then force the controller to be re-required
+    // so it binds to it.
+    require.cache[openaiPath] = new Module(openaiPath, null);
+    require.cache[openaiPath].filename = openaiPath;
+    require.cache[openaiPath].loaded = true;
+    require.cache[openaiPath].exports = stub;
+    delete require.cache[controllerPath];
+
+    const controller = require(controllerPath);
+    return { controller, calls, restore: () => {
+        delete require.cache[openaiPath];
+        delete require.cache[controllerPath];
+    } };
+}
+
+/** A minimal res that records the SSE frames written to it. */
+function recordingRes() {
+    const written = [];
+    const listeners = {};
+    return {
+        headers: null,
+        statusCode: 200,
+        jsonBody: null,
+        ended: false,
+        writeHead(code, headers) { this.statusCode = code; this.headers = headers; return this; },
+        write(chunk) { written.push(chunk); return true; },
+        end() { this.ended = true; },
+        status(code) { this.statusCode = code; return this; },
+        json(body) { this.jsonBody = body; this.ended = true; return this; },
+        on(evt, fn) { listeners[evt] = fn; },
+        get raw() { return written.join(''); },
+        /** Parses the recorded stream back into [{event, data}]. */
+        get events() {
+            return written.join('').split('\n\n').filter(Boolean).map((frame) => {
+                let event = 'message', payload = '';
+                for (const line of frame.split('\n')) {
+                    if (line.startsWith('event: ')) event = line.slice(7);
+                    else if (line.startsWith('data: ')) payload += line.slice(6);
+                }
+                return { event, data: JSON.parse(payload) };
+            });
+        }
+    };
+}
+
+// dashboard_chat_history.user_id is a foreign key into users, so the fake
+// callers below have to exist before anything can be persisted for them.
+// Without this the pipeline runs correctly and then fails on the final INSERT,
+// which is a fixture problem that looks exactly like a streaming bug.
+test('seed the users the streaming tests write history for', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    for (const id of ['u-stream-test', 'u-abort-test']) {
+        await localDb.execute('INSERT OR IGNORE INTO users (id, email) VALUES (?, ?)',
+            [id, `${id}@test.local`]);
+    }
+});
+
+const streamReq = (message, extra = {}) => ({
+    body: { message },
+    user: { id: 'u-stream-test' },
+    scope: { unrestricted: true },
+    on() {},
+    ...extra
+});
+
+test('the streamed answer sends its SQL before the prose', async () => {
+    const { controller, restore } = withStubbedModel([
+        { content: 'SELECT COUNT(*) AS n FROM workflow_entity' },
+        { chunks: ['There ', 'are ', 'some ', 'workflows.'] }
+    ]);
+    const res = recordingRes();
+    await controller.chatStream(streamReq('how many workflows?'), res);
+    restore();
+
+    const events = res.events;
+    const names = events.map((e) => e.event);
+
+    assert.equal(res.headers['Content-Type'], 'text/event-stream; charset=utf-8');
+    // Nginx buffers proxied responses by default, which turns a stream back into
+    // one delayed blob — the header that disables it is part of the contract.
+    assert.equal(res.headers['X-Accel-Buffering'], 'no');
+
+    assert.equal(names[0], 'sql', 'the query is the first thing the client learns');
+    assert.ok(names.indexOf('sql') < names.indexOf('delta'), 'and it precedes the answer');
+    assert.equal(names[names.length - 1], 'done');
+
+    assert.match(events[0].data.sql, /^SELECT/);
+    const answer = events.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.equal(answer, 'There are some workflows.');
+    assert.equal(events[events.length - 1].data.answer, 'There are some workflows.');
+    assert.ok(res.ended);
+});
+
+test('a stream refuses non-SELECT SQL as an event, not as a status', async () => {
+    // The headers are already out by the time the guard can fire on a stream,
+    // so a 400 is no longer available. An error that arrived as a silent
+    // disconnection would leave the widget spinning forever.
+    const { controller, restore } = withStubbedModel([
+        { content: 'DROP TABLE workflow_entity' }
+    ]);
+    const res = recordingRes();
+    await controller.chatStream(streamReq('delete everything'), res);
+    restore();
+
+    const events = res.events;
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'error');
+    assert.match(events[0].data.details, /SELECT/);
+    assert.equal(events[0].data.sqlUsed, 'DROP TABLE workflow_entity');
+    assert.ok(res.ended);
+});
+
+test('a stream refuses DML hidden inside a CTE', async () => {
+    const { controller, restore } = withStubbedModel([
+        { content: 'WITH x AS (DELETE FROM execution_entity RETURNING 1) SELECT * FROM x' }
+    ]);
+    const res = recordingRes();
+    await controller.chatStream(streamReq('clean up'), res);
+    restore();
+    assert.equal(res.events[0].event, 'error');
+    assert.match(res.events[0].data.details, /Destructive/);
+});
+
+test('a scoped user is refused before any stream is opened', async () => {
+    // Still a real HTTP status, because nothing has been written yet — and it
+    // has to be, or the browser cannot tell a refusal from an empty answer.
+    const { controller, restore } = withStubbedModel([]);
+    const res = recordingRes();
+    await controller.chatStream(
+        streamReq('anything', { scope: { unrestricted: false } }), res);
+    restore();
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.headers, null, 'no stream headers were written');
+    assert.match(res.jsonBody.error, /owners and admins/);
+});
+
+test('an over-long message is refused before any stream is opened', async () => {
+    const { controller, restore } = withStubbedModel([]);
+    const res = recordingRes();
+    await controller.chatStream(streamReq('x'.repeat(2001)), res);
+    restore();
+    assert.equal(res.statusCode, 400);
+    assert.equal(res.headers, null);
+});
+
+test('a client that disconnects mid-answer writes nothing to the history', async () => {
+    // A half-sentence in the history is worse than no record: the next turn
+    // feeds it back to the model as something it supposedly said.
+    const { controller, restore } = withStubbedModel([
+        { content: 'SELECT 1' },
+        { chunks: ['half a sen', 'tence'] }
+    ]);
+
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    const before = await localDb.query(
+        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ?', ['u-abort-test']);
+
+    let fireClose = null;
+    const res = recordingRes();
+    const req = streamReq('a question', {
+        user: { id: 'u-abort-test' },
+        on(evt, fn) { if (evt === 'close') fireClose = fn; }
+    });
+
+    const done = controller.chatStream(req, res);
+    // The controller registers its close handler synchronously, before the
+    // first await resolves.
+    await new Promise((r) => { setImmediate(r); });
+    if (fireClose) fireClose();
+    await done;
+    restore();
+
+    const after = await localDb.query(
+        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ?', ['u-abort-test']);
+    assert.equal(after.rows[0].n, before.rows[0].n,
+        'an aborted stream must not persist a partial answer');
+    assert.ok(!res.events.some((e) => e.event === 'done'), 'and must not claim it finished');
+});
+
+test('remove what the streaming tests wrote', async () => {
+    // The replica holds real data; a test that leaves rows behind in it is a
+    // test that slowly makes the real thing wrong.
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    for (const id of ['u-stream-test', 'u-abort-test']) {
+        await localDb.execute('DELETE FROM dashboard_chat_history WHERE user_id = ?', [id]);
+        await localDb.execute('DELETE FROM users WHERE id = ?', [id]);
+    }
+    const left = await localDb.query(
+        "SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id LIKE 'u-%-test'", []);
+    assert.equal(left.rows[0].n, 0);
+});

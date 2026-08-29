@@ -90,8 +90,7 @@ const CHANNEL_TYPES = {
         description: 'Posts the alert as JSON to any URL. Works with everything.',
         fields: [
             { key: 'url', label: 'URL', type: 'url', required: true },
-            { key: 'header_name', label: 'Extra header name', type: 'text', required: false },
-            { key: 'header_value', label: 'Extra header value', type: 'text', required: false, secret: true }
+            { key: 'headers', label: 'Custom headers', type: 'headers', required: false }
         ]
     },
     n8n_workflow: {
@@ -101,8 +100,7 @@ const CHANNEL_TYPES = {
             'and every integration n8n already has becomes an alert channel.',
         fields: [
             { key: 'url', label: 'n8n webhook URL', type: 'url', required: true },
-            { key: 'header_name', label: 'Auth header name', type: 'text', required: false },
-            { key: 'header_value', label: 'Auth header value', type: 'text', required: false, secret: true }
+            { key: 'headers', label: 'Custom headers', type: 'headers', required: false }
         ]
     },
     telegram: {
@@ -114,6 +112,130 @@ const CHANNEL_TYPES = {
         ]
     }
 };
+
+// ==========================================================================
+// Custom headers (F-24 §4)
+// ==========================================================================
+//
+// `webhook` and `n8n_workflow` used to have exactly `header_name` and
+// `header_value` — one pair, no more. An endpoint wanting both `Authorization`
+// and `X-Signature` was simply not expressible, and that is not an exotic
+// requirement: it is what a signed webhook looks like.
+//
+// The replacement is a list. The subtle part is the one the item flags: the
+// blank-means-keep rule for secrets has to work PER ROW. With a single pair it
+// could key off "the value field is empty". With a list, an empty value in row
+// two must resolve against the stored row two and not against row one, or
+// editing a header name silently moves another header's secret onto it.
+//
+// The row key is the header NAME, lower-cased. It is the natural identity —
+// HTTP header names are case-insensitive and cannot repeat here — and it
+// survives reordering in the form, which an array index does not.
+
+const MAX_HEADERS = 10;
+const MAX_HEADER_VALUE = 2000;
+
+// RFC 7230 token. Anything outside it cannot legally be a header name, and CR
+// or LF in particular are how one header becomes two requests.
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+// Set by this dashboard on every delivery. Letting a user override them is a
+// way to make a request that is not the request the engine believes it sent.
+const RESERVED_HEADERS = new Set([
+    'content-type', 'content-length', 'host', 'connection',
+    'transfer-encoding', 'upgrade'
+]);
+
+// What redactConfig writes in place of a stored value. Submitted back
+// unchanged it means "keep the one you have"  the same contract the single
+// secret field had, now per row.
+const SECRET_MASK = '••••••••';
+
+/**
+ * Reads whatever a config has stored as headers into a normalised list.
+ *
+ * Handles the legacy `header_name` / `header_value` pair, so channels created
+ * before this change keep working and keep their secret  without a migration
+ * step that could lose one.
+ */
+function readHeaders(config) {
+    if (!config || typeof config !== 'object') return [];
+    if (Array.isArray(config.headers)) {
+        return config.headers
+            .filter((h) => h && typeof h.name === 'string' && h.name)
+            .map((h) => ({ name: h.name, value: typeof h.value === 'string' ? h.value : '' }));
+    }
+    if (typeof config.header_name === 'string' && config.header_name) {
+        return [{ name: config.header_name, value: config.header_value || '' }];
+    }
+    return [];
+}
+
+/**
+ * Validates a submitted header list against what is already stored.
+ *
+ * @param {Array} submitted   [{ name, value }] straight off the form
+ * @param {Array} existing    the stored list, for resolving masked values
+ */
+function validateHeaders(submitted, existing) {
+    if (submitted === undefined || submitted === null || submitted === '') return { ok: true, value: [] };
+    if (!Array.isArray(submitted)) {
+        return { ok: false, error: 'Custom headers must be a list of name/value pairs.' };
+    }
+    if (submitted.length > MAX_HEADERS) {
+        return { ok: false, error: `At most ${MAX_HEADERS} custom headers.` };
+    }
+
+    const byName = new Map(existing.map((h) => [h.name.toLowerCase(), h.value]));
+    const out = [];
+    const seen = new Set();
+
+    for (const row of submitted) {
+        if (!row || typeof row !== 'object') {
+            return { ok: false, error: 'Each custom header must be a name/value pair.' };
+        }
+        const name = typeof row.name === 'string' ? row.name.trim() : '';
+        // A wholly blank row is a form artefact — the empty row an "add" button
+        // leaves behind — not an error worth shouting about.
+        if (!name && !String(row.value || '').trim()) continue;
+
+        if (!HEADER_NAME_RE.test(name)) {
+            return {
+                ok: false,
+                error: `"${name.slice(0, 40)}" is not a valid header name.`
+            };
+        }
+        const lower = name.toLowerCase();
+        if (RESERVED_HEADERS.has(lower)) {
+            return { ok: false, error: `${name} is set by the dashboard and cannot be overridden.` };
+        }
+        if (seen.has(lower)) {
+            return { ok: false, error: `${name} is listed twice.` };
+        }
+        seen.add(lower);
+
+        let value = typeof row.value === 'string' ? row.value : '';
+        // Per-row blank-means-keep, resolved by name, so reordering the rows in
+        // the form cannot move one header's secret onto another.
+        if (value === '' || value === SECRET_MASK) {
+            const kept = byName.get(lower);
+            if (kept === undefined) {
+                return { ok: false, error: `${name} has no value. Enter one, or remove the row.` };
+            }
+            value = kept;
+        }
+        if (value.length > MAX_HEADER_VALUE) {
+            return { ok: false, error: `${name} is longer than ${MAX_HEADER_VALUE} characters.` };
+        }
+        // A line break in a value splits the request in two at the far end.
+        if (/[\r\n]/.test(value)) {
+            return { ok: false, error: `${name} contains a line break, which a header cannot carry.` };
+        }
+        out.push({ name, value });
+    }
+
+    return { ok: true, value: out };
+}
 
 const MAX_NAME = 80;
 const MAX_WINDOW_MINUTES = 60 * 24 * 30;
@@ -312,6 +434,21 @@ function validateChannel(input, existingConfig = {}) {
     for (const field of spec.fields) {
         let value = submitted[field.key];
 
+        if (field.type === 'headers') {
+            // A caller still sending the old header_name/header_value pair is
+            // folded into the list rather than ignored. Ignoring it is the
+            // failure mode to avoid: the channel would be created, report
+            // success, and deliver without the auth header — a broken
+            // integration that looks like a working one.
+            if (value === undefined && typeof submitted.header_name === 'string' && submitted.header_name) {
+                value = [{ name: submitted.header_name, value: submitted.header_value || '' }];
+            }
+            const check = validateHeaders(value, readHeaders(existingConfig));
+            if (!check.ok) return { ok: false, error: check.error };
+            if (check.value.length) config[field.key] = check.value;
+            continue;
+        }
+
         // A blank secret means "leave it as it was", not "clear it". The form
         // cannot send back what it was never given.
         if (field.secret && (value === undefined || value === null || value === '')) {
@@ -350,11 +487,22 @@ function redactConfig(type, config) {
     if (!spec) return {};
     const out = {};
     for (const field of spec.fields) {
+        if (field.type === 'headers') {
+            // Redacted row by row. The NAME travels in clear — it has to, or
+            // the form cannot show which headers exist and nobody could edit
+            // one without retyping all of them — and every value is masked.
+            // The mask is what comes back on save to mean "keep this one",
+            // which is why it is a shared constant and not a literal repeated
+            // in three files.
+            const rows = readHeaders(config);
+            if (rows.length) out[field.key] = rows.map((h) => ({ name: h.name, value: SECRET_MASK }));
+            continue;
+        }
         const value = config ? config[field.key] : undefined;
         if (value === undefined || value === null || value === '') continue;
         // Present-but-hidden rather than absent, so the form can show that a
         // token exists without ever holding it.
-        out[field.key] = field.secret ? '••••••••' : value;
+        out[field.key] = field.secret ? SECRET_MASK : value;
     }
     return out;
 }
@@ -365,5 +513,10 @@ module.exports = {
     validateRule,
     validateChannel,
     validateUrl,
-    redactConfig
+    validateHeaders,
+    readHeaders,
+    redactConfig,
+    SECRET_MASK,
+    MAX_HEADERS,
+    RESERVED_HEADERS
 };

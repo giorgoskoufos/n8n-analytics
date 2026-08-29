@@ -22,7 +22,7 @@
         window.allWorkflows = await response.json();
         
         if (window.allWorkflows.length === 0) {
-            container.innerHTML = '<div class="text-center py-8 text-gray-500 text-sm">No workflows found. Run a sync first.</div>';
+            container.innerHTML = '<div class="text-center py-8 text-ink-3 text-sm">No workflows found. Run a sync first.</div>';
             return;
         }
 

@@ -1,5 +1,5 @@
 const localDb = require('./localDb');
-const { RULE_TYPES } = require('../utils/alertValidation');
+const { RULE_TYPES, readHeaders } = require('../utils/alertValidation');
 const { groupingClause } = require('../utils/grouping');
 const log = require('../utils/logger').logger('ALERT');
 
@@ -381,10 +381,20 @@ async function deliver(channel, event) {
         // webhook and n8n_workflow are the same wire format on purpose. The
         // difference is what is on the other end, and naming them separately is
         // what makes the n8n one discoverable.
-        const headers = { 'Content-Type': 'application/json' };
-        if (config.header_name && config.header_value) {
-            headers[config.header_name] = config.header_value;
-        }
+        // F-24 §4 · custom headers are a list now, not one pair.
+        //
+        // Read through `readHeaders`, which also understands the legacy
+        // header_name/header_value shape — so a channel created before that
+        // change keeps delivering with its header, without a data migration
+        // that could drop a secret on the way.
+        //
+        // Content-Type is applied AFTER the custom ones, not before: it is the
+        // one header this format depends on, and validation already refuses it
+        // by name. Two defences, because losing this one silently turns every
+        // alert into a body the receiver will not parse.
+        const headers = {};
+        for (const h of readHeaders(config)) headers[h.name] = h.value;
+        headers['Content-Type'] = 'application/json';
         const res = await fetch(config.url, {
             method: 'POST',
             headers,

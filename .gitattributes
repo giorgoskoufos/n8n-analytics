@@ -1,0 +1,16 @@
+# F-24 §7 · Line endings.
+#
+# index.html, chat.html, login.html, roi.html and settings.html were committed
+# with CR-only (classic Mac) line endings. Git sees such a file as a single
+# line, so every diff against one of them was the entire file — which means no
+# change to those five files has ever been reviewable. They have been converted
+# to LF; this pins them there so an editor cannot quietly convert one back.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.svg text eol=lf
+*.sqlite binary
+*.sqlite-shm binary
+*.sqlite-wal binary

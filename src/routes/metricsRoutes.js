@@ -90,6 +90,14 @@ router.delete('/alerts/channels/:id', requireElevatedRole, alertsController.dele
 // outside world on request.
 router.post('/alerts/channels/:id/test', requireElevatedRole, alertsController.testChannel);
 
+// F-24 §4 · cURL in and out.
+//
+// Parsing is elevated even though it has no side effect: it is a step in
+// creating a channel, and the SSRF verdict it returns is information about what
+// this server is allowed to reach.
+router.post('/alerts/channels/parse-curl', requireElevatedRole, alertsController.parseChannelCurl);
+router.get('/alerts/channels/:id/curl', requireElevatedRole, alertsController.exportChannelCurl);
+
 router.get('/alerts/events', alertsController.listEvents);
 router.post('/alerts/run', requireElevatedRole, alertsController.runNow);
 

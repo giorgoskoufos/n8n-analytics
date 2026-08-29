@@ -1,9 +1,11 @@
 const localDb = require('../config/localDb');
 const alertEngine = require('../config/alertEngine');
 const {
-    RULE_TYPES, CHANNEL_TYPES, validateRule, validateChannel, redactConfig
+    RULE_TYPES, CHANNEL_TYPES, validateRule, validateChannel, redactConfig,
+    readHeaders, SECRET_MASK, validateUrl
 } = require('../utils/alertValidation');
 const log = require('../utils/logger').logger('API');
+const { parseCurl, toCurl } = require('../utils/curl');
 
 /**
  * Managing alert rules and channels (F-13, F-14).
@@ -204,6 +206,111 @@ exports.updateChannel = async (req, res) => {
     } catch (err) {
         log.error(err);
         res.status(500).json({ error: 'Failed to update channel' });
+    }
+};
+
+/**
+ * Reads a pasted cURL command into the shape the channel form holds — F-24 §4.
+ *
+ * Parsed on the server, not in the browser, for the reason §7 exists: a second
+ * implementation of this in front-end JavaScript would be a second thing to
+ * keep correct, and this one has security-relevant edge cases. `src/utils/curl`
+ * is a pure parser that cannot execute anything.
+ *
+ * The URL is run through the ordinary channel validation before it comes back,
+ * so a paste pointing at a link-local or private address is refused HERE, where
+ * the person can see why, rather than silently at save time — and by the same
+ * `validateUrl` every hand-typed URL passes through, so the two cannot drift.
+ */
+exports.parseChannelCurl = (req, res) => {
+    const parsed = parseCurl(req.body && req.body.command);
+    if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+    const urlCheck = validateUrl(parsed.value.url);
+    if (!urlCheck.ok) return res.status(400).json({ error: urlCheck.error });
+
+    // Content-Type is ours to set on every delivery, so a pasted one is dropped
+    // rather than rejected — it is the single most common header in a curl
+    // command and refusing the paste over it would be obtuse.
+    const headers = parsed.value.headers.filter(
+        (h) => h.name.toLowerCase() !== 'content-type'
+    );
+
+    const notes = [];
+    if (parsed.value.method && parsed.value.method !== 'POST') {
+        notes.push(`The command uses ${parsed.value.method}. Alerts are always delivered as POST.`);
+    }
+    if (parsed.value.body) {
+        notes.push('The request body was ignored — the dashboard sends its own alert payload.');
+    }
+    if (headers.length !== parsed.value.headers.length) {
+        notes.push('Content-Type was dropped; the dashboard always sends application/json.');
+    }
+
+    res.json({ url: urlCheck.value, headers, notes });
+};
+
+/**
+ * Renders a channel as a cURL command.
+ *
+ * Secret values come out MASKED, and that is deliberate rather than an
+ * oversight. This API has never read a stored secret back to a browser — that
+ * is what `redactConfig` is for, and it is the reason a stolen session cannot
+ * be used to harvest every webhook token the dashboard holds. Handing them out
+ * through a second endpoint because the output is shaped like a shell command
+ * would undo it.
+ *
+ * So this answers "what request does this channel actually make", which is what
+ * the shape is useful for. For "does this channel work", the Test button sends
+ * a real message through the real config and reports what came back — a better
+ * answer than a command line anyway, because it exercises the delivery path
+ * this dashboard will actually use.
+ */
+exports.exportChannelCurl = async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid channel id' });
+    try {
+        const r = await localDb.query('SELECT * FROM alert_channels WHERE id = ?', [id]);
+        if (r.rows.length === 0) return res.status(404).json({ error: 'Channel not found' });
+        const channel = r.rows[0];
+        const config = JSON.parse(channel.config || '{}');
+
+        if (channel.type === 'telegram') {
+            return res.status(400).json({
+                error: 'Telegram channels are delivered through the Telegram API, not a plain webhook, ' +
+                    'so there is no equivalent command. Use Test to send a real message.'
+            });
+        }
+
+        const headers = readHeaders(config).map((h) => ({ name: h.name, value: SECRET_MASK }));
+        const command = toCurl({
+            url: config.url,
+            headers,
+            method: 'POST',
+            body: {
+                source: 'n8n-analytics-dashboard',
+                rule: 'Example rule',
+                title: 'Example alert',
+                body: 'This is the shape of what this channel receives.',
+                subject: 'workflow',
+                subject_label: 'Example workflow',
+                fired_at: new Date().toISOString(),
+                link: null,
+                data: {}
+            }
+        });
+
+        res.json({
+            command,
+            redacted: headers.length > 0,
+            note: headers.length
+                ? 'Header values are masked. Replace them before running this — the dashboard never ' +
+                  'reads a stored secret back. To check the channel end to end, use Test instead.'
+                : 'This channel sends no custom headers, so the command is complete as written.'
+        });
+    } catch (err) {
+        log.error(err);
+        res.status(500).json({ error: 'Failed to render the channel as a command' });
     }
 };
 

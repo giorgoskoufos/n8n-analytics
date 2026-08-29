@@ -17,17 +17,19 @@ document.addEventListener('DOMContentLoaded', initInsights);
 // Per-mode colour, fixed rather than assigned by position. A mode that drops out
 // of a window would otherwise hand its colour to the next one along, and the
 // chart would show webhook traffic turning into schedule traffic.
-const MODE_COLORS = {
-    webhook: '#6366f1',
-    trigger: '#22c55e',
-    manual: '#f59e0b',
-    error: '#ef4444',
-    retry: '#a78bfa',
-    integrated: '#22d3ee',
-    internal: '#94a3b8',
-    cli: '#f472b6',
-    evaluation: '#fb923c'
-};
+// F-24 §1 · Execution-mode colours come from the validated ramp, not from nine
+// hand-picked hexes.
+//
+// The old list contained `#22c55e` for schedules and `#ef4444` for the error
+// mode — a green and a red sitting beside a green "healthy" badge and a red
+// "failed" one, in the same panel. A series colour that looks like a status
+// colour is the one confusion the reserved palette exists to prevent, and this
+// page had it twice.
+//
+// Pinned in a fixed order so a mode absent from today's window does not shift
+// every colour after it the moment it reappears — "webhook is blue" has to hold
+// across a filter change or the legend teaches nothing.
+const MODE_ORDER = ['webhook', 'trigger', 'manual', 'integrated', 'retry', 'error', 'cli', 'internal'];
 const MODE_LABELS = {
     webhook: 'Webhook',
     trigger: 'Schedule / Trigger',
@@ -39,12 +41,19 @@ const MODE_LABELS = {
     cli: 'CLI',
     evaluation: 'Evaluation'
 };
-const modeColor = (m) => MODE_COLORS[m] || '#6b7280';
+window.Viz.pin('mode', MODE_ORDER);
+// Anything past the eight pinned slots — `evaluation`, or a mode a future n8n
+// invents — gets the muted ink rather than a ninth generated hue, which would
+// be indistinguishable from one of the eight under colour-vision deficiency.
+const modeColor = (m) => (MODE_ORDER.includes(m)
+    ? window.Viz.colorFor('mode', m)
+    : window.Viz.tokens().ink3);
 const modeLabel = (m) => MODE_LABELS[m] || m;
 
 let volumeChart = null;
 let lagChart = null;
 let concurrencyChart = null;
+let startedChart = null;
 let storageChart = null;
 let currentRange = { startDate: null, endDate: null };
 
@@ -92,6 +101,10 @@ async function initInsights() {
     // timezone has to be loaded before the first chart is drawn.
     await window.settingsReady;
     initCharts();
+    // The range is set; the panels may load now. insights_nav.js holds its
+    // loaders until this is true, because it decides visibility synchronously
+    // on DOMContentLoaded while this function is still awaiting settingsReady.
+    window.insightsReady = true;
     window.setInsightsRange(168);
 
     const startInput = document.getElementById('insightsRangeStart');
@@ -105,7 +118,7 @@ async function initInsights() {
     const silenceK = document.getElementById('silenceK');
     if (silenceK) silenceK.addEventListener('change', loadSilentWorkflows);
     const autosaves = document.getElementById('includeAutosaves');
-    if (autosaves) autosaves.addEventListener('change', loadDeploys);
+    if (autosaves) autosaves.addEventListener('change', loadInsightDeploys);
     for (const id of ['folderFilter', 'tagFilter']) {
         document.getElementById(id)?.addEventListener('change', loadAll);
     }
@@ -119,11 +132,11 @@ window.setInsightsRange = function (hours) {
     const mapping = { 24: 'btn24h', 48: 'btn48h', 168: 'btn7d', 336: 'btn14d', 720: 'btn30d' };
     document.querySelectorAll('#presetRangeContainer button').forEach((btn) => {
         btn.classList.remove('border-indigo-500/40', 'text-indigo-300');
-        btn.classList.add('border-gray-800', 'text-gray-500');
+        btn.classList.add('border-line', 'text-ink-3');
     });
     const active = document.getElementById(mapping[hours]);
     if (active) {
-        active.classList.remove('border-gray-800', 'text-gray-500');
+        active.classList.remove('border-line', 'text-ink-3');
         active.classList.add('border-indigo-500/40', 'text-indigo-300');
     }
     loadAll();
@@ -137,7 +150,7 @@ function applyCustomRange() {
     currentRange.endDate = new Date(endInput.value + 'T23:59:59').toISOString();
     document.querySelectorAll('#presetRangeContainer button').forEach((btn) => {
         btn.classList.remove('border-indigo-500/40', 'text-indigo-300');
-        btn.classList.add('border-gray-800', 'text-gray-500');
+        btn.classList.add('border-line', 'text-ink-3');
     });
     loadAll();
 }
@@ -162,23 +175,31 @@ function rangeQuery() {
 }
 
 /**
- * The four sections load independently.
+ * Reloads what is actually being looked at.
  *
- * One failing endpoint should cost its own panel and nothing else — the storage
- * forecast being unavailable is no reason to leave the queue lag chart empty.
+ * This used to call all eleven loaders on every range change, and on page load
+ * — eleven requests, several of them counting the whole replica, for a page on
+ * which a reader looks at one panel (F-24 §7). insights_nav.js owns which
+ * panels are visible and which have ever been loaded; this asks it to refresh
+ * those, and leaves the rest to load the first time anyone opens them.
+ *
+ * The per-panel independence the previous version had is kept, and matters for
+ * the same reason: one failing endpoint should cost its own panel and nothing
+ * else — the storage forecast being unavailable is no reason to leave the queue
+ * lag chart empty.
  */
 function loadAll() {
-    loadTriggers();
-    loadQueueLag();
-    loadConcurrency();
-    loadSilentWorkflows();
-    loadReliability();
-    loadOrganisation();
-    loadDependencies();
-    loadDeploys();
-    loadMetadata();
-    loadNodeProfile();
-    loadStorage();
+    if (typeof window.reloadVisibleInsights === 'function') {
+        window.reloadVisibleInsights();
+        return;
+    }
+    // The nav failed to load. Falling back to everything is worse for the
+    // server and correct for the reader, which is the right way round.
+    [loadTriggers, loadQueueLag, loadConcurrency, loadSilentWorkflows, loadReliability,
+        loadOrganisation, loadDependencies, loadInsightDeploys, loadMetadata,
+        loadNodeProfile, loadStorage].forEach((fn) => {
+        try { fn(); } catch (err) { console.error('[INSIGHTS]', err); }
+    });
 }
 
 // ── Coverage banner ──────────────────────────────────────────
@@ -206,7 +227,7 @@ function renderCoverage(el, coverage) {
     el.classList.remove('hidden');
     el.innerHTML = `
         <i class="fa-solid fa-circle-info mr-2 text-amber-400/80"></i>
-        Based on <strong class="text-gray-200">${fmtNum(coverage.covered)}</strong> of
+        Based on <strong class="text-ink-1">${fmtNum(coverage.covered)}</strong> of
         ${fmtNum(coverage.total)} executions in this window (${coverage.pct}%).
         The other ${fmtNum(missing)} were pruned from n8n before this data was mirrored${
     from ? `, so the split only goes back to ${escapeHtml(from)}` : ''}.`;
@@ -240,33 +261,33 @@ async function loadTriggers() {
         cards.innerHTML = data.modes.map((m) => {
             const ratio = blended > 0 ? m.error_rate / blended : 1;
             const versus = Math.abs(ratio - 1) < 0.15
-                ? '<span class="text-gray-600">in line with the average</span>'
+                ? '<span class="text-ink-3">in line with the average</span>'
                 : ratio > 1
                     ? `<span class="text-red-400/90">${ratio.toFixed(1)}× the overall rate</span>`
                     : `<span class="text-green-400/90">${(1 / ratio).toFixed(1)}× better than average</span>`;
             return `
-            <div class="bg-n8n-card p-5 rounded-xl border border-gray-800 relative overflow-hidden">
+            <div class="card kpi relative overflow-hidden">
                 <span class="absolute left-0 top-0 bottom-0 w-1"
                       style="background:${modeColor(m.mode)}"></span>
-                <p class="text-[10px] uppercase font-bold tracking-widest text-gray-500 mb-2">
+                <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-2">
                     ${escapeHtml(modeLabel(m.mode))}</p>
                 <div class="flex items-baseline gap-2 mb-3">
                     <span class="text-2xl font-bold text-white">${fmtNum(m.total)}</span>
-                    <span class="text-[10px] text-gray-500 uppercase tracking-widest">runs</span>
+                    <span class="text-[10px] text-ink-3 uppercase tracking-widest">runs</span>
                 </div>
                 <div class="flex items-baseline gap-2">
                     <span class="text-lg font-bold ${rateClass(m.error_rate)}">${fmtPct(m.error_rate)}</span>
-                    <span class="text-[10px] text-gray-500">${fmtNum(m.errors)} failed</span>
+                    <span class="text-[10px] text-ink-3">${fmtNum(m.errors)} failed</span>
                 </div>
                 <p class="text-[10px] mt-1">${versus}</p>
-                <div class="mt-3 pt-3 border-t border-gray-800/70 grid grid-cols-2 gap-2">
+                <div class="mt-3 pt-3 border-t border-line/70 grid grid-cols-2 gap-2">
                     <div>
-                        <p class="text-[9px] uppercase tracking-widest text-gray-600">Avg lag</p>
-                        <p class="text-xs text-gray-300 font-mono">${fmtMs(m.avg_lag_ms)}</p>
+                        <p class="text-[9px] uppercase tracking-widest text-ink-3">Avg lag</p>
+                        <p class="text-xs text-ink-2 font-mono">${fmtMs(m.avg_lag_ms)}</p>
                     </div>
                     <div>
-                        <p class="text-[9px] uppercase tracking-widest text-gray-600">Workflows</p>
-                        <p class="text-xs text-gray-300 font-mono">${fmtNum(m.workflows)}</p>
+                        <p class="text-[9px] uppercase tracking-widest text-ink-3">Workflows</p>
+                        <p class="text-xs text-ink-2 font-mono">${fmtNum(m.workflows)}</p>
                     </div>
                 </div>
             </div>`;
@@ -281,7 +302,7 @@ async function loadTriggers() {
             label: modeLabel(m.mode),
             data: (data.series[m.mode] || []).map((p) => p.total),
             borderColor: modeColor(m.mode),
-            backgroundColor: modeColor(m.mode) + '55',
+            backgroundColor: window.Viz.alpha(modeColor(m.mode), 0.45),
             fill: true,
             tension: 0.3,
             pointRadius: 0,
@@ -335,7 +356,7 @@ async function loadQueueLag() {
                     `p95 lag is ${bp.lag_ratio}× the earlier baseline while volume is ` +
                     `${bp.volume_ratio}× — the queue is draining slower than it fills.`;
             } else if (bp.reason) {
-                bpEl.className = 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-500';
+                bpEl.className = 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-line text-ink-3';
                 bpEl.innerHTML = `<i class="fa-solid fa-circle-minus mr-1"></i> ${escapeHtml(bp.reason)}.`;
             } else {
                 bpEl.className = 'text-xs rounded-lg px-3 py-2 bg-green-900/10 border border-green-500/20 text-green-300/90';
@@ -350,15 +371,15 @@ async function loadQueueLag() {
                     <td class="p-3">
                         <span class="inline-block w-2 h-2 rounded-full mr-2"
                               style="background:${modeColor(m.mode)}"></span>
-                        <span class="text-sm text-gray-200">${escapeHtml(modeLabel(m.mode))}</span>
+                        <span class="text-sm text-ink-1">${escapeHtml(modeLabel(m.mode))}</span>
                     </td>
-                    <td class="p-3 text-right text-gray-400 font-mono text-xs">${fmtNum(m.n)}</td>
-                    <td class="p-3 text-right text-gray-300 font-mono text-xs">${fmtMs(m.p50)}</td>
+                    <td class="p-3 text-right text-ink-2 font-mono text-xs">${fmtNum(m.n)}</td>
+                    <td class="p-3 text-right text-ink-2 font-mono text-xs">${fmtMs(m.p50)}</td>
                     <td class="p-3 text-right text-white font-mono text-xs font-bold">${fmtMs(m.p95)}</td>
-                    <td class="p-3 text-right text-gray-300 font-mono text-xs">${fmtMs(m.p99)}</td>
-                    <td class="p-3 text-right text-gray-500 font-mono text-xs">${fmtMs(m.max_ms)}</td>
+                    <td class="p-3 text-right text-ink-2 font-mono text-xs">${fmtMs(m.p99)}</td>
+                    <td class="p-3 text-right text-ink-3 font-mono text-xs">${fmtMs(m.max_ms)}</td>
                 </tr>`).join('')
-            : `<tr><td colspan="6" class="p-8 text-center text-gray-500 text-sm italic">
+            : `<tr><td colspan="6" class="p-8 text-center text-ink-3 text-sm italic">
                    No lag samples in this window</td></tr>`;
 
         lagChart.data.labels = data.series.map((p) => p.time_val);
@@ -408,7 +429,7 @@ async function loadConcurrency() {
             const near = data.limit && s.peak >= data.limit * 0.8;
             verdict.className = near
                 ? 'text-xs rounded-lg px-3 py-2 bg-red-900/20 border border-red-500/30 text-red-300 mb-2'
-                : 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-400 mb-2';
+                : 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-line text-ink-2 mb-2';
             verdict.innerHTML = near
                 ? `<i class="fa-solid fa-triangle-exclamation mr-1"></i> <strong>Peak of ${s.peak} against a ` +
                   `limit of ${data.limit}.</strong> Executions are queueing behind the ceiling rather than ` +
@@ -434,14 +455,26 @@ async function loadConcurrency() {
             }
         }
 
-        concurrencyChart.data.labels = data.series.map((p) => p.time_val);
+        const labels = data.series.map((p) => p.time_val);
+
+        concurrencyChart.data.labels = labels;
         concurrencyChart.data.datasets[0].data = data.series.map((p) => p.peak);
         concurrencyChart.data.datasets[1].data = data.series.map((p) => p.avg);
-        concurrencyChart.data.datasets[2].data = data.series.map((p) => p.started);
+
+        // The arrivals moved to their own plot below, sharing this x axis. See
+        // the note in initCharts: two measures on two scales are two charts,
+        // never two axes on one.
+        if (startedChart) {
+            startedChart.data.labels = labels;
+            startedChart.data.datasets[0].data = data.series.map((p) => p.started);
+            window.Viz.setEmpty(startedChart, labels.length > 0, 'No executions started',
+                'Nothing began in this window.');
+            startedChart.update();
+        }
         // The ceiling as a flat dataset rather than an annotation plugin: one
         // fewer vendored library for a horizontal line, and it disappears
         // cleanly when no limit has been configured.
-        const limitSet = concurrencyChart.data.datasets[3];
+        const limitSet = concurrencyChart.data.datasets[2];
         limitSet.data = data.limit ? data.series.map(() => data.limit) : [];
         limitSet.hidden = !data.limit;
         concurrencyChart.update();
@@ -465,7 +498,7 @@ const SILENCE_STATE = {
     silent: { label: 'Silent', cls: 'bg-rose-900/30 text-rose-300' },
     'stopped-after-change': { label: 'Stopped after an edit', cls: 'bg-amber-900/30 text-amber-300' },
     dormant: { label: 'Dormant', cls: 'bg-amber-900/20 text-amber-400/90' },
-    never: { label: 'Never observed', cls: 'bg-gray-800 text-gray-400' }
+    never: { label: 'Never observed', cls: 'bg-gray-800 text-ink-2' }
 };
 
 async function loadSilentWorkflows() {
@@ -517,20 +550,20 @@ async function loadSilentWorkflows() {
             // no execution row for it — the row was pruned — so the absence of
             // executions here is not evidence that it stopped.
             const evidence = w.verdict === 'never'
-                ? `<span class="text-gray-600">no execution ever recorded</span>`
-                : `<span class="text-gray-500">last seen via ${escapeHtml(w.last_run_source || 'execution')}</span>` +
+                ? `<span class="text-ink-3">no execution ever recorded</span>`
+                : `<span class="text-ink-3">last seen via ${escapeHtml(w.last_run_source || 'execution')}</span>` +
                   (w.changed_since_last_run
                       ? ' <span class="text-amber-400/90">· edited since</span>' : '');
             return `
                 <tr class="hover:bg-gray-800/30 transition-colors">
-                    <td class="p-3 text-sm text-gray-200 max-w-[240px] truncate">${escapeHtml(w.name)}</td>
+                    <td class="p-3 text-sm text-ink-1 max-w-[240px] truncate">${escapeHtml(w.name)}</td>
                     <td class="p-3"><span class="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${state.cls}">${state.label}</span></td>
-                    <td class="p-3 text-right font-mono text-xs text-gray-400">${
+                    <td class="p-3 text-right font-mono text-xs text-ink-2">${
     w.median_gap_s ? fmtDuration(w.median_gap_s) : '—'}</td>
                     <td class="p-3 text-right font-mono text-xs text-white">${
     w.silent_for_s === undefined ? '—' : fmtDuration(w.silent_for_s)}</td>
                     <td class="p-3 text-right font-mono text-xs ${
-    w.overdue_ratio > 10 ? 'text-rose-400 font-bold' : 'text-gray-400'}">${
+    w.overdue_ratio > 10 ? 'text-rose-400 font-bold' : 'text-ink-2'}">${
     w.overdue_ratio === undefined ? '—' : w.overdue_ratio + '×'}</td>
                     <td class="p-3 text-[11px]">${evidence}</td>
                 </tr>`;
@@ -572,7 +605,7 @@ async function loadReliability() {
         const note = document.getElementById('relNote');
         if (note) {
             note.innerHTML = data.retry_attempts === 0
-                ? `<i class="fa-solid fa-circle-info mr-1 text-gray-600"></i> No retries ran in this window, ` +
+                ? `<i class="fa-solid fa-circle-info mr-1 text-ink-3"></i> No retries ran in this window, ` +
                   `so the raw and effective rates are the same number. They separate as soon as ` +
                   `retries are enabled on a workflow — at which point a failure that succeeded on ` +
                   `the second attempt stops being counted as an outage.`
@@ -589,7 +622,7 @@ async function loadReliability() {
         if (finEl) {
             const odd = (fin.unfinished_success || 0) + (fin.finished_failure || 0);
             finEl.innerHTML = odd === 0
-                ? `<span class="text-gray-500">${fmtNum(fin.unfinished)} executions stopped without finishing — ` +
+                ? `<span class="text-ink-3">${fmtNum(fin.unfinished)} executions stopped without finishing — ` +
                   `exactly the set that failed or was canceled, so nothing here contradicts the status column.</span>`
                 : `<span class="text-amber-400">${fmtNum(odd)} executions disagree with their own status: ` +
                   `${fmtNum(fin.unfinished_success)} succeeded without finishing, ` +
@@ -604,11 +637,11 @@ async function loadReliability() {
                 storms.classList.remove('hidden');
                 document.getElementById('stormsBody').innerHTML = data.storms.map((s) => `
                     <tr class="hover:bg-gray-800/30">
-                        <td class="p-3 text-sm text-gray-200">${escapeHtml(s.name)}
+                        <td class="p-3 text-sm text-ink-1">${escapeHtml(s.name)}
                             ${archivedBadge(s.is_archived)}</td>
                         <td class="p-3 text-right font-mono text-xs text-amber-400">${fmtNum(s.retries)}</td>
                         <td class="p-3 text-right font-mono text-xs text-green-400">${fmtNum(s.recovered)}</td>
-                        <td class="p-3 text-right text-xs text-gray-500">
+                        <td class="p-3 text-right text-xs text-ink-3">
                             ${escapeHtml(window.formatTime(s.last_retry, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))}</td>
                     </tr>`).join('');
             }
@@ -642,10 +675,10 @@ async function loadOrganisation() {
 
         folderBody.innerHTML = data.folders.length ? data.folders.map((f) => `
             <tr class="hover:bg-gray-800/30 transition-colors">
-                <td class="p-3 text-sm text-gray-200">
-                    ${f.parent_folder_id ? '<span class="text-gray-600 mr-1">└</span>' : ''}${escapeHtml(f.name)}
+                <td class="p-3 text-sm text-ink-1">
+                    ${f.parent_folder_id ? '<span class="text-ink-3 mr-1">└</span>' : ''}${escapeHtml(f.name)}
                 </td>
-                <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(f.total_workflows)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(f.total_workflows)}</td>
                 <td class="p-3 text-right font-mono text-xs text-white">${fmtNum(f.total_executions)}</td>
                 <td class="p-3 text-right font-mono text-xs ${rateClass(f.error_rate)}">${fmtPct(f.error_rate)}</td>
             </tr>`).join('')
@@ -653,8 +686,8 @@ async function loadOrganisation() {
 
         tagBody.innerHTML = data.tags.length ? data.tags.map((t) => `
             <tr class="hover:bg-gray-800/30 transition-colors">
-                <td class="p-3 text-sm text-gray-200">${escapeHtml(t.name)}</td>
-                <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(t.workflows)}</td>
+                <td class="p-3 text-sm text-ink-1">${escapeHtml(t.name)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(t.workflows)}</td>
                 <td class="p-3 text-right font-mono text-xs text-white">${fmtNum(t.executions)}</td>
                 <td class="p-3 text-right font-mono text-xs ${rateClass(t.error_rate)}">${fmtPct(t.error_rate)}</td>
             </tr>`).join('')
@@ -681,7 +714,7 @@ function fillFilter(id, items, pick) {
 }
 
 const emptyRow = (cols, message) =>
-    `<tr><td colspan="${cols}" class="p-8 text-center text-gray-500 text-sm italic">${message}</td></tr>`;
+    `<tr><td colspan="${cols}" class="p-8 text-center text-ink-3 text-sm italic">${message}</td></tr>`;
 
 // ── F-10 · Blast radius ──────────────────────────────────────
 
@@ -694,11 +727,11 @@ async function loadDependencies() {
 
         tbody.innerHTML = data.credentials.length ? data.credentials.map((c) => `
             <tr class="hover:bg-gray-800/30 transition-colors" title="${escapeHtml(c.workflow_names.join(', '))}">
-                <td class="p-3 text-sm text-gray-200">${escapeHtml(c.name)}</td>
-                <td class="p-3 text-[11px] text-gray-500 font-mono">${escapeHtml(c.type || '—')}</td>
+                <td class="p-3 text-sm text-ink-1">${escapeHtml(c.name)}</td>
+                <td class="p-3 text-[11px] text-ink-3 font-mono">${escapeHtml(c.type || '—')}</td>
                 <td class="p-3 text-right font-mono text-xs ${
-    c.workflows >= 10 ? 'text-amber-400 font-bold' : 'text-gray-400'}">${fmtNum(c.workflows)}</td>
-                <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(c.executions)}</td>
+    c.workflows >= 10 ? 'text-amber-400 font-bold' : 'text-ink-2'}">${fmtNum(c.workflows)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(c.executions)}</td>
                 <td class="p-3 text-right font-mono text-xs ${rateClass(c.error_rate)}">${fmtPct(c.error_rate)}</td>
             </tr>`).join('')
             : emptyRow(5, 'No credential dependencies recorded');
@@ -711,9 +744,9 @@ async function loadDependencies() {
         if (panel && body) {
             panel.classList.toggle('hidden', data.calls.length === 0);
             body.innerHTML = data.calls.map((c) => `
-                <div class="flex items-center gap-2 text-gray-400">
-                    <span class="text-gray-200">${escapeHtml(c.parent_name || c.parent_id)}</span>
-                    <span class="text-gray-600">${c.kind === 'errorWorkflow' ? 'reports failures to' : 'calls'}</span>
+                <div class="flex items-center gap-2 text-ink-2">
+                    <span class="text-ink-1">${escapeHtml(c.parent_name || c.parent_id)}</span>
+                    <span class="text-ink-3">${c.kind === 'errorWorkflow' ? 'reports failures to' : 'calls'}</span>
                     <span class="text-indigo-300">${escapeHtml(c.child_name || c.child_id)}</span>
                 </div>`).join('');
         }
@@ -761,32 +794,32 @@ async function loadNodeProfile() {
 
         wfBody.innerHTML = data.workflows.length ? data.workflows.map((w) => `
             <tr class="hover:bg-gray-800/30 transition-colors">
-                <td class="p-3 text-sm text-gray-200">${escapeHtml(w.workflow_name)}${
+                <td class="p-3 text-sm text-ink-1">${escapeHtml(w.workflow_name)}${
     archivedBadge(w.is_archived)}
-                    <span class="block text-[10px] text-gray-600">${w.nodes} nodes ·
+                    <span class="block text-[10px] text-ink-3">${w.nodes} nodes ·
                     sample of ${w.executions_sampled}</span></td>
-                <td class="p-3 text-right font-mono text-xs text-gray-200">${fmtMs(w.ms_per_execution)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-1">${fmtMs(w.ms_per_execution)}</td>
                 <td class="p-3 text-[11px] text-cyan-300">${escapeHtml(w.top_node || '—')}</td>
                 <td class="p-3 text-right font-mono text-xs ${
-    w.top_share >= 75 ? 'text-amber-400 font-bold' : 'text-gray-400'}">${
+    w.top_share >= 75 ? 'text-amber-400 font-bold' : 'text-ink-2'}">${
     w.top_share === null ? '—' : w.top_share + '%'}</td>
             </tr>`).join('')
             : emptyRow(4, 'No workflow has been profiled yet');
 
         nodeBody.innerHTML = data.nodes.length ? data.nodes.map((n) => `
             <tr class="hover:bg-gray-800/30 transition-colors">
-                <td class="p-3 text-sm text-gray-200">${escapeHtml(n.node_name)}${
+                <td class="p-3 text-sm text-ink-1">${escapeHtml(n.node_name)}${
     // A chat model or a memory never writes to the main output, so it has no
     // item count. Saying which kind of node it is beats an unexplained dash.
     n.is_sub_node ? '<span class="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 ' +
         'rounded bg-purple-900/40 text-purple-300">sub-node</span>' : ''}${
     n.failed_runs ? '<span class="ml-2 text-[9px] uppercase tracking-widest px-1.5 py-0.5 ' +
         `rounded bg-rose-900/40 text-rose-300">${n.failed_runs} failed</span>` : ''}
-                    <span class="block text-[10px] text-gray-600">${escapeHtml(n.workflow_name)}</span></td>
-                <td class="p-3 text-right font-mono text-xs text-gray-200">${fmtMs(n.ms_per_execution)}</td>
+                    <span class="block text-[10px] text-ink-3">${escapeHtml(n.workflow_name)}</span></td>
+                <td class="p-3 text-right font-mono text-xs text-ink-1">${fmtMs(n.ms_per_execution)}</td>
                 <td class="p-3 text-right font-mono text-xs ${
-    n.runs_per_execution > 1 ? 'text-amber-300' : 'text-gray-500'}">${n.runs_per_execution}&times;</td>
-                <td class="p-3 text-right font-mono text-xs text-gray-500">${
+    n.runs_per_execution > 1 ? 'text-amber-300' : 'text-ink-3'}">${n.runs_per_execution}&times;</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-3">${
     n.items_per_execution === null ? '—' : fmtNum(n.items_per_execution)}</td>
             </tr>`).join('')
             : emptyRow(4, 'No node timings yet');
@@ -797,12 +830,12 @@ async function loadNodeProfile() {
                 const grew = e.ratio > 1;
                 return `
                 <tr class="hover:bg-gray-800/30 transition-colors">
-                    <td class="p-3 text-[11px] text-gray-400">${escapeHtml(e.workflow_name)}</td>
-                    <td class="p-3 text-sm text-gray-200">${escapeHtml(e.from_node)}
-                        <i class="fa-solid fa-arrow-right-long mx-2 text-gray-600"></i>${
+                    <td class="p-3 text-[11px] text-ink-2">${escapeHtml(e.workflow_name)}</td>
+                    <td class="p-3 text-sm text-ink-1">${escapeHtml(e.from_node)}
+                        <i class="fa-solid fa-arrow-right-long mx-2 text-ink-3"></i>${
     escapeHtml(e.to_node)}</td>
-                    <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(e.items_in)}</td>
-                    <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(e.items_out)}</td>
+                    <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(e.items_in)}</td>
+                    <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(e.items_out)}</td>
                     <td class="p-3 text-right font-mono text-xs ${
     grew ? 'text-sky-300' : 'text-amber-300'}">${grew ? '×' + e.ratio : '×' + e.ratio}</td>
                 </tr>`;
@@ -817,7 +850,7 @@ async function loadNodeProfile() {
 
 // ── F-11 · Deploys ───────────────────────────────────────────
 
-async function loadDeploys() {
+async function loadInsightDeploys() {
     const tbody = document.getElementById('deployBody');
     try {
         const autosaves = document.getElementById('includeAutosaves')?.checked ? '&autosaves=true' : '';
@@ -836,22 +869,22 @@ async function loadDeploys() {
             // compare two unrelated automations and read as a regression that
             // never happened.
             const delta = d.error_rate_delta === undefined || d.error_rate_delta === null
-                ? '<span class="text-gray-600">first measured</span>'
+                ? '<span class="text-ink-3">first measured</span>'
                 : d.error_rate_delta > 0
                     ? `<span class="text-red-400">+${d.error_rate_delta}pp</span>`
                     : d.error_rate_delta < 0
                         ? `<span class="text-green-400">${d.error_rate_delta}pp</span>`
-                        : '<span class="text-gray-500">no change</span>';
+                        : '<span class="text-ink-3">no change</span>';
             return `
                 <tr class="hover:bg-gray-800/30 transition-colors">
-                    <td class="p-3 text-[11px] text-gray-400">${escapeHtml(window.formatTime(d.created_at,
+                    <td class="p-3 text-[11px] text-ink-2">${escapeHtml(window.formatTime(d.created_at,
         { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }))}</td>
-                    <td class="p-3 text-sm text-gray-200 max-w-[200px] truncate">${escapeHtml(d.workflow_name || '—')}${
-    d.autosaved ? ' <span class="text-[9px] text-gray-600 uppercase">autosave</span>' : ''}</td>
-                    <td class="p-3 text-[11px] text-gray-400">${escapeHtml(d.authors || '—')}</td>
-                    <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(d.executions)}</td>
+                    <td class="p-3 text-sm text-ink-1 max-w-[200px] truncate">${escapeHtml(d.workflow_name || '—')}${
+    d.autosaved ? ' <span class="text-[9px] text-ink-3 uppercase">autosave</span>' : ''}</td>
+                    <td class="p-3 text-[11px] text-ink-2">${escapeHtml(d.authors || '—')}</td>
+                    <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(d.executions)}</td>
                     <td class="p-3 text-right font-mono text-xs ${
-    d.error_rate === null ? 'text-gray-600' : rateClass(d.error_rate)}">${
+    d.error_rate === null ? 'text-ink-3' : rateClass(d.error_rate)}">${
     d.error_rate === null ? '—' : fmtPct(d.error_rate)}</td>
                     <td class="p-3 text-right text-[11px]">${delta}</td>
                 </tr>`;
@@ -885,10 +918,10 @@ async function loadMetadata() {
             const usable = k.distinct_values <= data.max_values_per_key;
             return `
             <tr class="hover:bg-gray-800/30 transition-colors">
-                <td class="p-3 text-sm text-gray-200 font-mono">${escapeHtml(k.key)}</td>
-                <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(k.occurrences)}</td>
-                <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(k.distinct_values)}</td>
-                <td class="p-3 text-[11px] ${usable ? 'text-green-400/80' : 'text-gray-600'}">${
+                <td class="p-3 text-sm text-ink-1 font-mono">${escapeHtml(k.key)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(k.occurrences)}</td>
+                <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(k.distinct_values)}</td>
+                <td class="p-3 text-[11px] ${usable ? 'text-green-400/80' : 'text-ink-3'}">${
     usable ? 'yes' : `too many distinct values (over ${data.max_values_per_key}) — this is a payload field, not a facet`
 }</td>
             </tr>`;
@@ -932,7 +965,7 @@ async function loadStorage() {
         const verdict = document.getElementById('storeVerdict');
         if (verdict) {
             if (!f.known) {
-                verdict.className = 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-gray-800 text-gray-500';
+                verdict.className = 'text-xs rounded-lg px-3 py-2 bg-black/20 border border-line text-ink-3';
                 verdict.textContent = f.reason ? `Not enough history yet — ${f.reason}.` : 'Not enough history yet.';
             } else if (!f.pruning) {
                 const p = f.projection || {};
@@ -979,23 +1012,23 @@ async function loadStorage() {
         tbody.innerHTML = data.byWorkflow.length
             ? data.byWorkflow.map((w) => `
                 <tr class="hover:bg-gray-800/30 transition-colors">
-                    <td class="p-3 text-sm text-gray-200 max-w-[240px] truncate">
+                    <td class="p-3 text-sm text-ink-1 max-w-[240px] truncate">
                         ${escapeHtml(w.name)}${archivedBadge(w.is_archived)}</td>
-                    <td class="p-3 text-right font-mono text-xs text-gray-400">${fmtNum(w.runs)}</td>
+                    <td class="p-3 text-right font-mono text-xs text-ink-2">${fmtNum(w.runs)}</td>
                     <td class="p-3 text-right font-mono text-xs text-white">${fmtBytes(w.bytes)}</td>
                     <td class="p-3 text-right font-mono text-xs ${
-    w.avg_json_bytes > 1048576 ? 'text-amber-400 font-bold' : 'text-gray-400'
+    w.avg_json_bytes > 1048576 ? 'text-amber-400 font-bold' : 'text-ink-2'
 }">${fmtBytes(w.avg_json_bytes)}</td>
                     <td class="p-3 w-40">
                         <div class="flex items-center gap-2">
                             <div class="flex-1 h-1.5 bg-black/40 rounded overflow-hidden">
                                 <div class="h-full bg-indigo-500/70" style="width:${Math.min(100, w.pct)}%"></div>
                             </div>
-                            <span class="text-[10px] text-gray-500 font-mono w-10 text-right">${w.pct}%</span>
+                            <span class="text-[10px] text-ink-3 font-mono w-10 text-right">${w.pct}%</span>
                         </div>
                     </td>
                 </tr>`).join('')
-            : `<tr><td colspan="5" class="p-8 text-center text-gray-500 text-sm italic">
+            : `<tr><td colspan="5" class="p-8 text-center text-ink-3 text-sm italic">
                    No payload sizes recorded yet</td></tr>`;
 
         storageChart.data.labels = data.daily.map((d) => d.day);
@@ -1018,13 +1051,13 @@ function setText(id, value) {
 
 function archivedBadge(isArchived) {
     return isArchived
-        ? ' <span class="text-[9px] uppercase tracking-widest text-gray-600 border border-gray-700 ' +
+        ? ' <span class="text-[9px] uppercase tracking-widest text-ink-3 border border-line-2 ' +
           'rounded px-1 py-0.5 ml-1">archived</span>'
         : '';
 }
 
 function emptyPanel(icon, message) {
-    return `<div class="col-span-full p-10 text-center text-gray-500 text-sm italic">
+    return `<div class="col-span-full p-10 text-center text-ink-3 text-sm italic">
         <i class="fa-solid ${icon} text-3xl mb-3 opacity-20 block"></i>${escapeHtml(message)}</div>`;
 }
 
@@ -1032,23 +1065,13 @@ function emptyPanel(icon, message) {
 
 function initCharts() {
     if (typeof Chart === 'undefined') return;
-    Chart.defaults.font.family = "'Open Sans', sans-serif";
-    Chart.defaults.color = '#9ca3af';
+    const V = window.Viz;
 
-    // Bucket boundaries are UTC; every label goes through formatTime so the axis
-    // reads in the same zone as the rest of the dashboard.
-    const timeAxis = (opts = {}) => ({
-        grid: { display: false },
-        ticks: {
-            color: '#555',
-            maxTicksLimit: 10,
-            maxRotation: 0,
-            callback: function (val) {
-                const label = this.getLabelForValue(val);
-                return window.formatTime(label, opts);
-            }
-        }
-    });
+    // Colours, fonts, grid, tooltip styling, legend placement and interaction
+    // all come from ui/viz.js. This function is down to what each chart plots.
+    // The eleven-panel page had four charts and four private copies of that
+    // chrome, one of which set `Chart.defaults.color` globally and therefore
+    // reached into every other chart on the page (F-24 §1).
 
     const volumeEl = document.getElementById('volumeByModeChart');
     if (volumeEl) {
@@ -1056,107 +1079,117 @@ function initCharts() {
             type: 'line',
             data: { labels: [], datasets: [] },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
-                    tooltip: {
-                        callbacks: {
-                            title: (items) => (items.length
-                                ? window.formatTime(items[0].label,
-                                    { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                                : '')
-                        }
-                    }
-                },
-                scales: {
-                    y: { stacked: true, grid: { color: '#262626' }, min: 0 },
-                    x: timeAxis({ month: 'short', day: 'numeric' })
-                }
-            }
-        });
-    }
-
-    const lagEl = document.getElementById('lagChart');
-    if (lagEl) {
-        lagChart = new Chart(lagEl.getContext('2d'), {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'p50', data: [], borderColor: '#22c55e', borderWidth: 1.5, tension: 0.3, pointRadius: 0, fill: false },
-                    { label: 'p95', data: [], borderColor: '#f59e0b', borderWidth: 2, tension: 0.3, pointRadius: 0, fill: false },
-                    { label: 'p99', data: [], borderColor: '#ef4444', borderWidth: 1.5, tension: 0.3, pointRadius: 0, borderDash: [4, 3], fill: false }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                // Gaps are real: a bucket with no executions has no percentile,
-                // and joining across it would invent a measurement.
-                spanGaps: false,
-                plugins: {
-                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                    legend: { position: 'bottom' },
                     tooltip: {
                         callbacks: {
                             title: (items) => (items.length
                                 ? window.formatTime(items[0].label,
                                     { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                                 : ''),
-                            label: (ctx) => ` ${ctx.dataset.label}: ${fmtMs(ctx.parsed.y)}`
+                            label: (ctx) => ` ${ctx.dataset.label}: ${V.unit('count').fmt(ctx.parsed.y)}`
                         }
                     }
                 },
                 scales: {
-                    y: {
-                        grid: { color: '#262626' },
-                        min: 0,
-                        ticks: { callback: (v) => fmtMs(v) }
-                    },
-                    x: timeAxis({ month: 'short', day: 'numeric' })
+                    y: V.yAxis({ unit: 'count', stacked: true, title: 'Executions' }),
+                    x: V.xTimeAxis({ format: { month: 'short', day: 'numeric' }, maxTicks: 10 })
                 }
             }
         });
+        V.enableBrush(volumeChart, volumeEl.parentElement);
     }
 
+    const lagEl = document.getElementById('lagChart');
+    if (lagEl) {
+        const t = V.tokens();
+        lagChart = new Chart(lagEl.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    // An ordered set — p50 < p95 < p99 — so it takes the ordinal
+                    // reading of the status ramp rather than three unrelated
+                    // categorical hues: as the percentile gets worse the colour
+                    // gets more alarming, which is information the old
+                    // green/amber/red already carried by accident.
+                    { label: 'p50 (typical)', data: [], borderColor: t.good, borderWidth: 1.5, fill: false },
+                    { label: 'p95', data: [], borderColor: t.warning, borderWidth: 2, fill: false },
+                    { label: 'p99 (worst)', data: [], borderColor: t.critical, borderWidth: 1.5, fill: false }
+                ]
+            },
+            options: {
+                // Gaps are real: a bucket with no executions has no percentile,
+                // and joining across it would invent a measurement.
+                spanGaps: false,
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => (items.length
+                                ? window.formatTime(items[0].label,
+                                    { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                : ''),
+                            label: (ctx) => ` ${ctx.dataset.label}: ${V.unit('ms').fmt(ctx.parsed.y)}`
+                        }
+                    }
+                },
+                scales: {
+                    y: V.yAxis({ unit: 'ms', title: 'Wait before starting' }),
+                    x: V.xTimeAxis({ format: { month: 'short', day: 'numeric' }, maxTicks: 10 })
+                }
+            }
+        });
+        V.enableBrush(lagChart, lagEl.parentElement);
+    }
+
+    // ── Concurrency: two charts, not two axes ────────────────────────────
+    //
+    // This was one chart with `y` on the left for simultaneous executions and
+    // `y1` on the right for executions started, and a comment defending it:
+    // "the whole point of the panel is that these two series live on different
+    // scales."
+    //
+    // That is the argument for two axes and it is the reason not to have them.
+    // Where the two scales line up is arbitrary — it falls out of the two
+    // maxima — so the chart draws a relationship between occupancy and arrivals
+    // that is an artefact of the axis choice and not a fact about the
+    // instance. Nudge either range and the "correlation" moves.
+    //
+    // The prescribed alternative is small multiples: two plots, one x axis,
+    // read by looking down instead of across. The comparison the panel exists
+    // for survives — a spike in arrivals still sits directly above the
+    // occupancy at that moment — and nothing is implied about their ratio.
     const concEl = document.getElementById('concurrencyInsightChart');
     if (concEl) {
+        const t = V.tokens();
         concurrencyChart = new Chart(concEl.getContext('2d'), {
+            type: 'line',
             data: {
                 labels: [],
                 datasets: [
                     {
-                        type: 'line', label: 'Peak simultaneous', data: [],
-                        borderColor: '#a78bfa', borderWidth: 2, pointRadius: 0,
+                        label: 'Peak simultaneous', data: [],
+                        borderColor: V.series(6), borderWidth: 2,
                         // Stepped, because concurrency is an integer count that
                         // changes at instants. A smoothed curve through 1, 3, 1
                         // draws values like 2.4 that never existed.
-                        stepped: true, yAxisID: 'y'
+                        stepped: true, fill: false
                     },
                     {
-                        type: 'line', label: 'Average occupancy', data: [],
-                        borderColor: '#22d3ee', borderWidth: 1.5, pointRadius: 0,
-                        borderDash: [4, 3], yAxisID: 'y'
+                        label: 'Average occupancy', data: [],
+                        borderColor: V.series(2), borderWidth: 1.5,
+                        borderDash: [4, 3], fill: false
                     },
                     {
-                        type: 'bar', label: 'Started', data: [],
-                        backgroundColor: 'rgba(99,102,241,0.28)', yAxisID: 'y1', order: 10
-                    },
-                    {
-                        type: 'line', label: 'Limit', data: [], hidden: true,
-                        borderColor: '#ef4444', borderWidth: 1.5, borderDash: [8, 4],
-                        pointRadius: 0, yAxisID: 'y'
+                        label: 'Configured limit', data: [], hidden: true,
+                        borderColor: t.critical, borderWidth: 1.5, borderDash: [8, 4], fill: false
                     }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                    legend: { position: 'bottom' },
                     tooltip: {
                         callbacks: {
                             title: (items) => (items.length
@@ -1167,19 +1200,41 @@ function initCharts() {
                     }
                 },
                 scales: {
-                    // Two axes on purpose: the whole point of the panel is that
-                    // these two series live on different scales — a bucket that
-                    // starts sixteen executions never holds more than three.
-                    y: {
-                        position: 'left', min: 0, grid: { color: '#262626' },
-                        title: { display: true, text: 'simultaneous', color: '#666', font: { size: 9 } },
-                        ticks: { precision: 0 }
-                    },
-                    y1: {
-                        position: 'right', min: 0, grid: { display: false },
-                        title: { display: true, text: 'started', color: '#666', font: { size: 9 } }
-                    },
-                    x: timeAxis({ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    y: V.yAxis({ unit: 'count', title: 'Running at once', maxTicks: 5 }),
+                    // The top chart hides its tick labels: the axis underneath
+                    // is the same axis, and printing it twice is noise between
+                    // two plots that are meant to be read as one.
+                    x: { ...V.xTimeAxis({ format: { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } }),
+                        ticks: { display: false } }
+                }
+            }
+        });
+    }
+
+    const startedEl = document.getElementById('concurrencyStartedChart');
+    if (startedEl) {
+        startedChart = new Chart(startedEl.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{ label: 'Executions started', data: [], backgroundColor: V.series(0) }]
+            },
+            options: {
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => (items.length
+                                ? window.formatTime(items[0].label,
+                                    { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                : ''),
+                            label: (ctx) => ` ${V.unit('count').fmt(ctx.parsed.y)} started`
+                        }
+                    }
+                },
+                scales: {
+                    y: V.yAxis({ unit: 'count', title: 'Started', maxTicks: 4 }),
+                    x: V.xTimeAxis({ format: { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' } })
                 }
             }
         });
@@ -1192,30 +1247,38 @@ function initCharts() {
             data: {
                 labels: [],
                 datasets: [
-                    { label: 'JSON', data: [], backgroundColor: '#6366f1' },
-                    { label: 'Binary', data: [], backgroundColor: '#22d3ee' }
+                    { label: 'JSON', data: [], backgroundColor: V.series(0) },
+                    { label: 'Binary', data: [], backgroundColor: V.series(2) }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
                 plugins: {
-                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
-                    tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} MB` } }
+                    legend: { position: 'bottom' },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} MB`
+                        }
+                    }
                 },
                 scales: {
                     // Day keys are plain YYYY-MM-DD, already the calendar day the
                     // bytes belong to — no timezone conversion, which would shift
                     // a day's payload into its neighbour.
-                    x: { stacked: true, grid: { display: false }, ticks: { color: '#555', maxTicksLimit: 12 } },
-                    y: {
-                        stacked: true,
-                        grid: { color: '#262626' },
-                        min: 0,
-                        ticks: { callback: (v) => `${v} MB` }
-                    }
+                    x: { ...V.xTimeAxis({ format: { month: 'short', day: 'numeric' }, maxTicks: 12 }), stacked: true },
+                    y: V.yAxis({ stacked: true, title: 'MB per day' })
                 }
             }
         });
     }
 }
+
+// ── Exposed for insights_nav.js ──────────────────────────────
+//
+// The nav decides WHEN a panel loads; this file still decides HOW. Assigned
+// rather than declared global so the boundary between the two is one visible
+// list rather than eleven implicit ones.
+Object.assign(window, {
+    loadTriggers, loadQueueLag, loadConcurrency, loadSilentWorkflows, loadReliability,
+    loadOrganisation, loadDependencies, loadInsightDeploys, loadMetadata,
+    loadNodeProfile, loadStorage
+});

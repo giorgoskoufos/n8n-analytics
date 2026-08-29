@@ -341,10 +341,33 @@ exports.getExecutions = async (req, res) => {
 exports.getSlowest = async (req, res) => {
     try {
         const scope = scopeClause(req.scope, 'e."workflowId"');
+
+        // F-24 §5 · "Where the time went" belongs on this tab too.
+        //
+        // The trace renderer and `GET /api/executions/:id/trace` (F-12) both
+        // already exist, and the item is right that this is where they are more
+        // use: a slow execution has no error message to show — only time. But
+        // the tab listed workflows, and a trace is a property of one execution,
+        // so there was nothing to open.
+        //
+        // So the row carries its own worst run. Not the most recent one: the
+        // question behind this tab is "why is this workflow slow", and the run
+        // that best answers it is the slowest one, not whichever happened last.
+        // `max_duration` ships alongside it so the row can say how far that run
+        // sits from the average it is listed by — a 9s average made of 9s runs
+        // and one made of a 200s outlier are different problems.
         const query = `
             SELECT w.name, w."isArchived" AS is_archived,
                    AVG((julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400) as avg_duration,
-                   COUNT(e.id) as total_runs
+                   MAX((julianday(e."stoppedAt") - julianday(e."startedAt")) * 86400) as max_duration,
+                   COUNT(e.id) as total_runs,
+                   (SELECT e2.id
+                      FROM execution_entity e2
+                     WHERE e2."workflowId" = w.id
+                       AND e2."startedAt" > ?
+                       AND e2."stoppedAt" IS NOT NULL
+                     ORDER BY (julianday(e2."stoppedAt") - julianday(e2."startedAt")) DESC
+                     LIMIT 1) as slowest_exec_id
             FROM execution_entity e
             JOIN workflow_entity w ON e."workflowId" = w.id
             WHERE e."startedAt" > ?
@@ -353,7 +376,9 @@ exports.getSlowest = async (req, res) => {
             ORDER BY avg_duration DESC
             LIMIT 10;
         `;
-        const result = await localDb.query(query, [isoDaysAgo(7), ...scope.params]);
+        // The correlated subquery is bound first — it appears earlier in the
+        // statement text, which is the order SQLite numbers the placeholders in.
+        const result = await localDb.query(query, [isoDaysAgo(7), isoDaysAgo(7), ...scope.params]);
         res.json(result.rows);
     } catch (err) {
         log.error(err);
@@ -994,6 +1019,34 @@ exports.getErrorIntelligence = async (req, res) => {
         const range = parseDateRange(req.query.startDate, req.query.endDate);
         if (!range.ok) return res.status(400).json({ error: range.error });
 
+        // F-24 §3 · the gap F-02 left behind.
+        //
+        // F-02 put ?mode= on getMetrics, getExecutions, getExecutionVolume and
+        // getExecutionVolumeDetails — and not on this endpoint. So the
+        // dashboard could say webhooks fail at 4.03% and schedules at 0.82%,
+        // and could not say WHICH ERRORS were whose. The one question the
+        // breakdown makes worth asking was the one it could not answer.
+        //
+        // execution_error_analytics has no mode column of its own: its primary
+        // key IS the execution id (that is what `ex.id = a.id` in the behaviour
+        // query below relies on), so the filter is a join back to
+        // execution_entity on the primary key. Cheap, and it keeps `mode` in
+        // exactly one table.
+        const modeCheck = parseExecutionMode(req.query.mode);
+        if (!modeCheck.ok) return res.status(400).json({ error: modeCheck.error });
+        const mode = modeCheck.mode;
+
+        // Applied to the analytics table (via the id join) and to
+        // execution_entity directly, because the error rate is a ratio and both
+        // halves of it must describe the same population. Filtering only the
+        // numerator would report webhook errors over ALL executions and produce
+        // a rate that is wrong in the direction that looks reassuring.
+        const modeAnalytics = (alias) => mode
+            ? ` AND ${alias ? alias + '.' : ''}id IN (SELECT id FROM execution_entity WHERE mode = ?)`
+            : '';
+        const mp = mode ? [mode] : [];              // the one bound value, or none
+        const modeExec = (alias) => mode ? ` AND ${alias ? alias + '.' : ''}mode = ?` : '';
+
         let startIso, endIso;
 
         if (range.start && range.end) {
@@ -1027,27 +1080,27 @@ exports.getErrorIntelligence = async (req, res) => {
                 SUM(CASE WHEN error_category IN ('rate_limit','network','upstream') THEN 1 ELSE 0 END) as transient_count,
                 SUM(CASE WHEN error_category IN ('auth','config','data','logic') THEN 1 ELSE 0 END) as structural_count
             FROM execution_error_analytics
-            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}
+            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}${modeAnalytics('')}
         `;
 
         const prevSummaryQuery = `
             SELECT COUNT(*) as total_errors
             FROM execution_error_analytics
-            WHERE timestamp >= ? AND timestamp < ?${aScope.sql}
+            WHERE timestamp >= ? AND timestamp < ?${aScope.sql}${modeAnalytics('')}
         `;
 
         // Total executions for error rate calculation
         const execCountQuery = `
             SELECT COUNT(*) as total
             FROM execution_entity
-            WHERE "startedAt" >= ? AND "startedAt" <= ?${eScope.sql}
+            WHERE "startedAt" >= ? AND "startedAt" <= ?${eScope.sql}${modeExec('')}
         `;
 
         // 2. Category Breakdown
         const categoryQuery = `
             SELECT error_category, COUNT(*) as count
             FROM execution_error_analytics
-            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}
+            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}${modeAnalytics('')}
             GROUP BY error_category
             ORDER BY count DESC
         `;
@@ -1056,7 +1109,7 @@ exports.getErrorIntelligence = async (req, res) => {
         const trendQuery = `
             SELECT date(timestamp) as day, error_category, COUNT(*) as count
             FROM execution_error_analytics
-            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}
+            WHERE timestamp >= ? AND timestamp <= ?${aScope.sql}${modeAnalytics('')}
             GROUP BY date(timestamp), error_category
             ORDER BY day ASC
         `;
@@ -1070,7 +1123,7 @@ exports.getErrorIntelligence = async (req, res) => {
                 ROUND((1.0 - (CAST(COUNT(CASE WHEN e.status = 'error' THEN 1 END) AS REAL) / NULLIF(COUNT(e.id), 0))) * 100, 1) as health_score
             FROM workflow_entity w
             JOIN execution_entity e ON w.id = e."workflowId"
-            WHERE e."startedAt" >= ? AND e."startedAt" <= ?${weScope.sql}
+            WHERE e."startedAt" >= ? AND e."startedAt" <= ?${weScope.sql}${modeExec('e')}
             GROUP BY w.id, w.name
             HAVING COUNT(CASE WHEN e.status = 'error' THEN 1 END) > 0
             ORDER BY health_score ASC
@@ -1108,7 +1161,7 @@ exports.getErrorIntelligence = async (req, res) => {
             JOIN workflow_entity w ON a.workflow_id = w.id
             LEFT JOIN error_fingerprints f ON f.fingerprint = a.fingerprint
             WHERE a.timestamp >= ? AND a.timestamp <= ?
-              AND a.fingerprint IS NOT NULL${aaScope.sql}
+              AND a.fingerprint IS NOT NULL${aaScope.sql}${modeAnalytics('a')}
             GROUP BY a.fingerprint
             ORDER BY count DESC
             LIMIT 50
@@ -1137,6 +1190,13 @@ exports.getErrorIntelligence = async (req, res) => {
         // at the top of the range — an error that is the last execution in the
         // window would otherwise be counted as never recovering, purely because
         // the window ended.
+        // Note on ?mode= and this query: the filter lands on `a` (the error
+        // rows being judged) and deliberately NOT on the `ex` CTE. The question
+        // is "did the next run of this workflow succeed", and the next run is
+        // the next run whatever triggered it. Filtering the CTE to one mode
+        // would make a webhook failure followed by a successful schedule run
+        // read as never having recovered, which is a claim about the filter
+        // rather than about the error.
         const behaviourQuery = `
             WITH ex AS (
                 SELECT id, LEAD(status) OVER (
@@ -1151,7 +1211,7 @@ exports.getErrorIntelligence = async (req, res) => {
               FROM execution_error_analytics a
               JOIN ex ON ex.id = a.id
              WHERE a.timestamp >= ? AND a.timestamp <= ?
-               AND a.fingerprint IS NOT NULL${aScope.sql}
+               AND a.fingerprint IS NOT NULL${aScope.sql}${modeAnalytics('a')}
              GROUP BY a.fingerprint
         `;
 
@@ -1168,21 +1228,21 @@ exports.getErrorIntelligence = async (req, res) => {
             SELECT a.fingerprint, a.error_category, COUNT(*) as count
             FROM execution_error_analytics a
             WHERE a.timestamp >= ? AND a.timestamp <= ?
-              AND a.fingerprint IS NOT NULL${aScope.sql}
+              AND a.fingerprint IS NOT NULL${aScope.sql}${modeAnalytics('a')}
             GROUP BY a.fingerprint, a.error_category
         `;
 
         const [summary, prevSummary, execCount, categories, trend, health, groups, groupCategories,
             behaviour] = await Promise.all([
-                localDb.query(summaryQuery, [startIso, endIso, ...aScope.params]),
-                localDb.query(prevSummaryQuery, [prevStartIso, prevEndIso, ...aScope.params]),
-                localDb.query(execCountQuery, [startIso, endIso, ...eScope.params]),
-                localDb.query(categoryQuery, [startIso, endIso, ...aScope.params]),
-                localDb.query(trendQuery, [startIso, endIso, ...aScope.params]),
-                localDb.query(healthQuery, [startIso, endIso, ...weScope.params]),
-                localDb.query(groupsQuery, [startIso, endIso, ...aaScope.params]),
-                localDb.query(groupCategoryQuery, [startIso, endIso, ...aScope.params]),
-                localDb.query(behaviourQuery, [startIso, startIso, endIso, ...aScope.params])
+                localDb.query(summaryQuery, [startIso, endIso, ...aScope.params, ...mp]),
+                localDb.query(prevSummaryQuery, [prevStartIso, prevEndIso, ...aScope.params, ...mp]),
+                localDb.query(execCountQuery, [startIso, endIso, ...eScope.params, ...mp]),
+                localDb.query(categoryQuery, [startIso, endIso, ...aScope.params, ...mp]),
+                localDb.query(trendQuery, [startIso, endIso, ...aScope.params, ...mp]),
+                localDb.query(healthQuery, [startIso, endIso, ...weScope.params, ...mp]),
+                localDb.query(groupsQuery, [startIso, endIso, ...aaScope.params, ...mp]),
+                localDb.query(groupCategoryQuery, [startIso, endIso, ...aScope.params, ...mp]),
+                localDb.query(behaviourQuery, [startIso, startIso, endIso, ...aScope.params, ...mp])
             ]);
 
         const totalErrors = summary.rows[0].total_errors || 0;
@@ -1270,6 +1330,10 @@ exports.getErrorIntelligence = async (req, res) => {
             // How much the fingerprinting collapsed, so the change is visible
             // rather than merely asserted in a commit message.
             grouping: { by: 'fingerprint', groups: enrichedGroups.length },
+            // Echoed so the page can state which slice it is showing. A filtered
+            // view that looks like an unfiltered one is the same failure as an
+            // empty chart that looks like a quiet day.
+            mode,
             n8nBaseUrl
         });
 
@@ -1349,7 +1413,7 @@ exports.getWorkflowErrorDrilldown = async (req, res) => {
 
 exports.getErrorGroupExecutions = async (req, res) => {
     try {
-        const { fingerprint, startDate, endDate } = req.body;
+        const { fingerprint, startDate, endDate, mode: rawMode } = req.body;
 
         // A fingerprint is 16 hex characters produced by this server. Anything
         // else is not a value a client could have got from us, and validating the
@@ -1367,6 +1431,16 @@ exports.getErrorGroupExecutions = async (req, res) => {
         const range = parseDateRange(startDate, endDate);
         if (!range.ok) return res.status(400).json({ error: range.error });
 
+        // The same filter as the list above it, for the same reason L-30 gave:
+        // if the filter applies to the group row but not to the rows behind it,
+        // a group counted as 12 opens onto 30 occurrences and the page
+        // contradicts itself in the space of one click.
+        const modeCheck = parseExecutionMode(rawMode);
+        if (!modeCheck.ok) return res.status(400).json({ error: modeCheck.error });
+        const modeSql = modeCheck.mode
+            ? ' AND a.id IN (SELECT id FROM execution_entity WHERE mode = ?)' : '';
+        const modeParams = modeCheck.mode ? [modeCheck.mode] : [];
+
         const scope = scopeClause(req.scope, 'a.workflow_id');
 
         // One indexed lookup. The previous version matched on error_category,
@@ -1380,13 +1454,14 @@ exports.getErrorGroupExecutions = async (req, res) => {
             FROM execution_error_analytics a
             JOIN workflow_entity w ON a.workflow_id = w.id
             WHERE a.fingerprint = ?
-              AND a.timestamp >= ? AND a.timestamp <= ?${scope.sql}
+              AND a.timestamp >= ? AND a.timestamp <= ?${scope.sql}${modeSql}
             ORDER BY a.timestamp DESC
             LIMIT 30
         `;
 
         const result = await localDb.query(query, [
-            fingerprint, range.start.toISOString(), range.end.toISOString(), ...scope.params
+            fingerprint, range.start.toISOString(), range.end.toISOString(),
+            ...scope.params, ...modeParams
         ]);
         res.json({ executions: result.rows });
     } catch (err) {

@@ -1,1 +1,82 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover, interactive-widget=resizes-content">    <title>ROI Analytics | n8n Dashboard</title>    <script src="../logic/guard.js"></script>    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">    <link rel="stylesheet" href="../css/styles.css">    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">    <link rel="manifest" href="../assets/site.webmanifest"></head><body class="p-4 md:p-8">    <div class="max-w-7xl mx-auto">            <!-- Global Header Placeholder -->            <div id="header-target" data-title="ROI Analytics" data-subtitle="Automation Time Savings"></div>        <div class="flex justify-end mb-6 w-full">            <div class="flex items-center gap-3 bg-n8n-card border border-gray-800 rounded-lg px-4 py-2 w-full sm:w-64 hover:border-gray-700 transition-colors">                <span class="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-0">Range</span>                <select id="roiTimeRangeFilter" class="bg-transparent border-none text-sm text-white font-semibold focus:outline-none w-full cursor-pointer" style="-webkit-appearance: none; appearance: none;">                    <option value="all" selected>All Time</option>                    <option value="24h">Last 24h</option>                    <option value="48h">Last 48h</option>                    <option value="7d">Last 7 Days</option>                    <option value="30d">Last 30 Days</option>                </select>            </div>        </div>        <!-- KPI Cards -->        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">            <div class="bg-gradient-to-br from-green-900/40 to-n8n-card border border-green-500/20 p-6 rounded-xl shadow-sm flex flex-col justify-center">                <div class="text-green-400 mb-2 font-semibold uppercase tracking-wider text-xs">Total Time Saved</div>                <div id="kpiTotalTime" class="text-5xl font-black text-white">--</div>                <div class="text-sm text-gray-400 mt-2">All time</div>            </div>            <div class="bg-gradient-to-br from-emerald-900/40 to-n8n-card border border-emerald-500/20 p-6 rounded-xl shadow-sm flex flex-col justify-center">                <div class="text-emerald-400 mb-2 font-semibold uppercase tracking-wider text-xs">Total Money Saved</div>                <div id="kpiTotalMoney" class="text-5xl font-black text-white">--</div>                <div class="text-sm text-gray-400 mt-2">Calculated from hourly rates</div>            </div>            <div class="bg-n8n-card border border-gray-800 p-6 rounded-xl shadow-sm flex flex-col justify-center">                <div class="text-gray-400 mb-2 font-semibold uppercase tracking-wider text-xs">Eligible Executions</div>                <div id="kpiExecutions" class="text-4xl font-bold text-white">--</div>                <div class="text-sm text-gray-400 mt-2">Successfully completed runs</div>            </div>        </div>        <!-- Details -->        <div class="bg-n8n-card border border-gray-800 rounded-xl p-6 shadow-sm overflow-hidden mb-6">            <h2 class="text-lg font-bold mb-4">Top Workflows by Time Saved</h2>            <div class="overflow-x-auto">                <table class="w-full text-left border-collapse">                    <thead>                        <tr class="border-b border-gray-800 text-sm text-gray-400">                            <th class="pb-3 font-semibold">Workflow Name</th>                            <th class="pb-3 font-semibold text-right">Executions</th>                            <th class="pb-3 font-semibold text-right">Time Saved</th>                            <th class="pb-3 font-semibold text-right">Money Saved</th>                        </tr>                    </thead>                    <tbody id="roiWorkflowsTable" class="text-sm divide-y divide-gray-800/50">                        <tr>                            <td colspan="4" class="py-6 text-center text-gray-500">                                <i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading data...                            </td>                        </tr>                    </tbody>                </table>            </div>        </div>    </div>    <!-- Scripts -->    <script type="module" src="../logic/app.js"></script>    <script src="../logic/global_functions.js"></script>    <script src="../logic/roi.js"></script>    <script src="../logic/header.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover, interactive-widget=resizes-content">
+    <title>ROI Analytics | n8n Dashboard</title>
+    <script src="../logic/guard.js"></script>
+    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+    <link rel="manifest" href="../assets/site.webmanifest">
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+            <!-- Global Header Placeholder -->
+            <div id="header-target" data-title="ROI Analytics" data-subtitle="Automation Time Savings"></div>
+        <div class="flex justify-end mb-6 w-full">
+            <div class="flex items-center gap-3 bg-n8n-card border border-line rounded-lg px-4 py-2 w-full sm:w-64 hover:border-line-2 transition-colors">
+                <span class="text-[10px] text-ink-3 font-bold uppercase tracking-widest mb-0">Range</span>
+                <select id="roiTimeRangeFilter" class="bg-transparent border-none text-sm text-white font-semibold focus:outline-none w-full cursor-pointer" style="-webkit-appearance: none; appearance: none;">
+                    <option value="all" selected>All Time</option>
+                    <option value="24h">Last 24h</option>
+                    <option value="48h">Last 48h</option>
+                    <option value="7d">Last 7 Days</option>
+                    <option value="30d">Last 30 Days</option>
+                </select>
+            </div>
+        </div>
+        <!-- KPI Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+            <div class="bg-gradient-to-br from-green-900/40 to-n8n-card border border-green-500/20 p-6 rounded-xl shadow-sm flex flex-col justify-center">
+                <div class="text-green-400 mb-2 font-semibold uppercase tracking-wider text-xs">Total Time Saved</div>
+                <div id="kpiTotalTime" class="text-5xl font-black text-white">--</div>
+                <div class="text-sm text-ink-2 mt-2">All time</div>
+            </div>
+            <div class="bg-gradient-to-br from-emerald-900/40 to-n8n-card border border-emerald-500/20 p-6 rounded-xl shadow-sm flex flex-col justify-center">
+                <div class="text-emerald-400 mb-2 font-semibold uppercase tracking-wider text-xs">Total Money Saved</div>
+                <div id="kpiTotalMoney" class="text-5xl font-black text-white">--</div>
+                <div class="text-sm text-ink-2 mt-2">Calculated from hourly rates</div>
+            </div>
+            <div class="bg-n8n-card border border-line p-6 rounded-xl shadow-sm flex flex-col justify-center">
+                <div class="text-ink-2 mb-2 font-semibold uppercase tracking-wider text-xs">Eligible Executions</div>
+                <div id="kpiExecutions" class="text-4xl font-bold text-white">--</div>
+                <div class="text-sm text-ink-2 mt-2">Successfully completed runs</div>
+            </div>
+        </div>
+        <!-- Details -->
+        <div class="card p-6 shadow-sm overflow-hidden mb-6">
+            <h2 class="text-lg font-bold mb-4">Top Workflows by Time Saved</h2>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b border-line text-sm text-ink-2">
+                            <th class="pb-3 font-semibold">Workflow Name</th>
+                            <th class="pb-3 font-semibold text-right">Executions</th>
+                            <th class="pb-3 font-semibold text-right">Time Saved</th>
+                            <th class="pb-3 font-semibold text-right">Money Saved</th>
+                        </tr>
+                    </thead>
+                    <tbody id="roiWorkflowsTable" class="text-sm divide-y divide-gray-800/50">
+                        <tr>
+                            <td colspan="4" class="py-6 text-center text-ink-3">
+                                <i class="fa-solid fa-spinner fa-spin mr-2"></i>Loading data...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <!-- Scripts -->
+    <script type="module" src="../logic/app.js"></script>
+    <script src="../logic/global_functions.js"></script>
+    <script src="../logic/ui/components.js"></script>
+    <script src="../logic/roi.js"></script>
+    <script src="../logic/header.js"></script>
+</body>
+</html>

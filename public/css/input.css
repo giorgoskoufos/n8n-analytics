@@ -1,131 +1,525 @@
 @import "tailwindcss";
 
+/* =========================================================================
+   F-24 · The design token layer.
+   =========================================================================
+
+   The acceptance criterion of F-24, in one sentence: a change to a colour, a
+   card, a badge or an axis happens in ONE place. Before this file, it happened
+   in none — nine `new Chart(` calls each declared their own palette, two
+   themes (`:root` and `.theme-errors`) disagreed about what "success" is, and
+   every card was a re-typed `bg-n8n-card p-6 rounded-xl border border-gray-800`.
+
+   Three rules govern everything below.
+
+   1. MARK COLOURS AND INK COLOURS ARE DIFFERENT THINGS. A colour that fills a
+      bar needs 3:1 against its surface; a colour that spells a word needs 4.5:1.
+      The old palette used one set for both, and it measured: `--n8n-success`
+      `#278250` sat at 3.33:1 on the card and was used as *text*, and Tailwind's
+      `text-gray-500` — the label style on essentially every panel in the app —
+      at 3.29:1. Both are below AA. So status ships as a `-mark` / `-ink` pair
+      and the ink half is the only one allowed near a glyph.
+
+   2. THE SERIES PALETTE IS VALIDATED, NOT CHOSEN. The eight `--series-*` slots
+      below are the `dataviz` dark categorical ramp, run through
+      `scripts/validate_palette.js --mode dark --surface #222222` — this app's
+      actual chart surface, not the skill's default. All five gates pass:
+      lightness band, chroma floor, CVD separation (worst adjacent pair ΔE 8.4
+      protan), normal-vision floor (19.3), and 3:1 contrast. Slots are assigned
+      to entities in fixed order and never cycled or re-sorted by rank.
+
+   3. STATUS COLOURS ARE RESERVED. good / warning / serious / critical mean a
+      state. They are never "series 9", and a series colour never means a state.
+
+   The `@theme` block re-exports every token as a Tailwind utility, so markup
+   can say `bg-surface-1 text-ink-2 border-line` and existing pages can migrate
+   a panel at a time instead of in one unreviewable commit.
+   ========================================================================= */
+
 @theme {
   --font-sans: "Open Sans", sans-serif;
 
-  --color-n8n-dark: var(--n8n-dark);
-  --color-n8n-card: var(--n8n-card);
-  --color-n8n-primary: var(--n8n-primary);
-  --color-n8n-success: var(--n8n-success);
-  --color-n8n-danger: var(--n8n-danger);
-  --color-n8n-text: var(--n8n-text);
-  --color-n8n-hover: var(--n8n-hover);
+  /* Surfaces — four planes, in depth order. */
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  /* Ink — three weights, all of them AA on every surface above. */
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+
+  /* Hairlines. */
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+
+  /* Brand. Identity only — never a series, never a status. */
+  --color-brand: var(--brand);
+
+  /* Status — the -mark half fills, the -ink half spells. */
+  --color-good: var(--good-ink);
+  --color-warning: var(--warning-ink);
+  --color-serious: var(--serious-ink);
+  --color-critical: var(--critical-ink);
+  --color-good-mark: var(--good-mark);
+  --color-warning-mark: var(--warning-mark);
+  --color-serious-mark: var(--serious-mark);
+  --color-critical-mark: var(--critical-mark);
+
+  /* Categorical series, fixed order. */
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-6: var(--series-6);
+  --color-series-7: var(--series-7);
+  --color-series-8: var(--series-8);
+
+  /* Legacy aliases. The old names still resolve so that a page not yet
+     migrated keeps rendering; they point at the new tokens, so the two can no
+     longer drift apart. Delete once nothing references them. */
+  --color-n8n-dark: var(--surface-0);
+  --color-n8n-card: var(--surface-1);
+  --color-n8n-primary: var(--brand);
+  --color-n8n-success: var(--good-ink);
+  --color-n8n-danger: var(--critical-ink);
+  --color-n8n-text: var(--ink-1);
+  --color-n8n-hover: var(--surface-3);
 }
 
 @layer base {
   :root {
     color-scheme: dark;
-    --n8n-dark: #171717;
-    --n8n-card: #222222;
-    --n8n-primary: #ff6f5c;
-    --n8n-success: #278250;
-    --n8n-danger: #f16a75;
-    --n8n-text: #eeeeee;
-    --n8n-hover: #333333;
+
+    /* ---- Surfaces ---------------------------------------------------- */
+    --surface-0: #171717;   /* page plane */
+    --surface-1: #222222;   /* card — every contrast number here is against this */
+    --surface-2: #2a2a2a;   /* raised: table headers, nested panels */
+    --surface-3: #333333;   /* hover */
+
+    /* ---- Ink --------------------------------------------------------- */
+    /* Measured on #222222 / #171717 / #2a2a2a respectively. */
+    --ink-1: #eeeeee;       /* 13.71 · 15.45 · 12.37 — values, headings */
+    --ink-2: #b9b7b0;       /*  7.93 ·  8.93 ·  7.15 — body */
+    --ink-3: #9a978f;       /*  5.45 ·  6.14 ·  4.92 — labels, axis ticks */
+    /* There is deliberately no fourth, dimmer step. `text-gray-600` was being
+       used as a label colour at 2.4:1, which is decoration pretending to be
+       information. If a thing is too unimportant for --ink-3, it is too
+       unimportant for the page. */
+
+    /* ---- Hairlines --------------------------------------------------- */
+    --line: rgba(255, 255, 255, 0.08);
+    --line-2: rgba(255, 255, 255, 0.16);
+
+    /* ---- Brand ------------------------------------------------------- */
+    --brand: #ff6f5c;       /* 5.82 on card — safe as text as well as a fill */
+    --brand-dim: rgba(255, 111, 92, 0.14);
+
+    /* ---- Status ------------------------------------------------------ */
+    /* mark: fills and dots, needs 3:1.  ink: text, needs 4.5:1. */
+    --good-mark: #0ca30c;      --good-ink: #4ade80;      /* 4.74 / 9.13 */
+    --warning-mark: #fab219;   --warning-ink: #fab219;   /* 8.67 — one colour clears both */
+    --serious-mark: #ec835a;   --serious-ink: #ec835a;   /* 6.03 — likewise */
+    --critical-mark: #d03b3b;  --critical-ink: #f87171;  /* 3.31 / 5.75 */
+
+    /* ---- Categorical series ------------------------------------------ */
+    /* dataviz dark ramp, validated against #222222. Fixed order; slot 1 is
+       always slot 1 for the same entity regardless of how it currently ranks. */
+    --series-1: #3987e5;  /* blue    */
+    --series-2: #d95926;  /* orange  */
+    --series-3: #199e70;  /* aqua    */
+    --series-4: #c98500;  /* yellow  */
+    --series-5: #d55181;  /* magenta */
+    --series-6: #008300;  /* green   */
+    --series-7: #9085e9;  /* violet  */
+    --series-8: #e66767;  /* red     */
+
+    /* ---- Chart chrome ------------------------------------------------ */
+    --grid: rgba(255, 255, 255, 0.06);
+    --axis: rgba(255, 255, 255, 0.14);
+
+    /* ---- Geometry ---------------------------------------------------- */
+    --r-sm: 6px;
+    --r-md: 10px;
+    --r-lg: 14px;
+    --sidebar-w: 236px;
+    --sidebar-w-collapsed: 64px;
   }
 
-  .theme-errors {
-    --n8n-dark: #121212;
-    --n8n-card: #1a1a1a;
-    --n8n-success: #4ade80;
-    --n8n-danger: #f87171;
-  }
+  /* `.theme-errors` is gone.
+
+     It re-defined --n8n-success and --n8n-danger for one page, which is the
+     F-24 bug in its purest form: two files that both believe they define what
+     "an error is red" means, and a fix applied to either one only half-lands.
+     The errors page now renders from the same tokens as everything else. */
 
   body {
-    background-color: var(--n8n-dark);
-    color: var(--n8n-text);
+    background-color: var(--surface-0);
+    color: var(--ink-1);
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Select styling fixes for visibility */
-  select {
-    color-scheme: dark;
-  }
-  
+  select { color-scheme: dark; }
   select option {
-    background-color: var(--n8n-card);
-    color: var(--n8n-text);
+    background-color: var(--surface-1);
+    color: var(--ink-1);
+  }
+
+  /* Focus is a token too. Keyboard users get one ring everywhere, and it is
+     the brand colour rather than the browser default that dark backgrounds
+     routinely swallow. */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  /* Nothing animates for someone who asked it not to. The shimmer, the pulse
+     and the drawer transitions all key off this. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
   }
 }
 
-/* Base custom classes ported from styles.css */
+/* =========================================================================
+   Components — the shared vocabulary.
+
+   F-24 §7: "the card, the table, the badge and the modal are re-written in
+   errors.js, insights.js, alerts.js and settings_system.js separately." These
+   classes are that shared layer. No bundler required, which was the point.
+   ========================================================================= */
+
 @layer components {
-  .status-success {
-    background-color: rgba(39, 130, 80, 0.2);
-    color: #4ade80;
+
+  /* ---- Card ---------------------------------------------------------- */
+
+  .card {
+    background-color: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    position: relative;
   }
 
-  .status-error {
-    background-color: rgba(241, 106, 117, 0.2);
-    color: #f87171;
+  .card-pad { padding: 1.25rem; }
+
+  /* A card that owns a table or a scroll region clips its children to the
+     radius instead of letting a square-cornered <thead> poke out of it. */
+  .card-clip { overflow: hidden; }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.875rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    background-color: color-mix(in srgb, var(--surface-2) 55%, transparent);
   }
 
-  .tab-btn.active {
-    border-bottom: 2px solid var(--n8n-primary);
-    color: var(--n8n-primary);
+  .card-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--ink-2);
+    letter-spacing: 0.01em;
   }
 
-  /* Markdown Chat Styling */
-  .prose-chat table {
-    display: block;
-    width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-collapse: collapse;
-    margin: 8px 0;
+  /* ---- Label / eyebrow ------------------------------------------------ */
+
+  .label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-3);
+  }
+
+  /* ---- KPI tile ------------------------------------------------------- */
+  /*
+     dashboard-design puts the KPI row at the top and makes the number the
+     largest thing on it; dataviz says a standalone figure takes proportional
+     figures, never tabular — `121` in tabular-nums reads loose at 30px. Both
+     are encoded here so no page has to remember either.
+  */
+
+  .kpi { padding: 1.25rem; }
+
+  .kpi-value {
+    font-size: 1.875rem;
+    line-height: 1.1;
+    font-weight: 700;
+    color: var(--ink-1);
+    font-variant-numeric: proportional-nums;
+  }
+
+  .kpi-sub {
     font-size: 11px;
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 8px;
+    color: var(--ink-3);
+    margin-top: 0.375rem;
   }
 
-  .prose-chat th {
-    background: rgba(99, 102, 241, 0.1);
-    padding: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+  /* A KPI tile that leads somewhere says so by being reachable, not by a
+     cursor change nobody sees until they are already on it. */
+  .kpi-link {
+    cursor: pointer;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
     text-align: left;
-    color: #818cf8;
+    width: 100%;
+    display: block;
+  }
+  .kpi-link:hover { border-color: var(--line-2); background-color: var(--surface-2); }
+
+  /* ---- Badge ---------------------------------------------------------- */
+  /*
+     One badge. Tone comes from a modifier, and every tone pairs its colour
+     with a word — dataviz's rule that a status is never carried by hue alone.
+  */
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.6;
     white-space: nowrap;
+    border: 1px solid transparent;
   }
 
-  .prose-chat td {
-    padding: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    color: #d1d5db;
-    white-space: nowrap;
+  .badge-neutral  { background: var(--surface-3); color: var(--ink-2); }
+  .badge-good     { background: color-mix(in srgb, var(--good-mark) 18%, transparent);     color: var(--good-ink);     border-color: color-mix(in srgb, var(--good-mark) 35%, transparent); }
+  .badge-warning  { background: color-mix(in srgb, var(--warning-mark) 15%, transparent);  color: var(--warning-ink);  border-color: color-mix(in srgb, var(--warning-mark) 32%, transparent); }
+  .badge-serious  { background: color-mix(in srgb, var(--serious-mark) 15%, transparent);  color: var(--serious-ink);  border-color: color-mix(in srgb, var(--serious-mark) 32%, transparent); }
+  .badge-critical { background: color-mix(in srgb, var(--critical-mark) 20%, transparent); color: var(--critical-ink); border-color: color-mix(in srgb, var(--critical-mark) 38%, transparent); }
+  .badge-brand    { background: var(--brand-dim); color: var(--brand); border-color: color-mix(in srgb, var(--brand) 32%, transparent); }
+
+  .badge-dot {
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+    flex: none;
   }
 
-  .prose-chat strong {
-    color: #818cf8;
+  /* ---- Buttons / chips ------------------------------------------------ */
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 38px;
+    padding: 0 0.875rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    background: var(--surface-1);
+    color: var(--ink-2);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--line-2); color: var(--ink-1); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-primary {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: #1a0c09;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--brand) 88%, white);
+    color: #1a0c09;
+  }
+
+  .btn-danger { color: var(--critical-ink); border-color: color-mix(in srgb, var(--critical-mark) 35%, transparent); }
+  .btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--critical-mark) 15%, transparent); color: var(--critical-ink); }
+
+  .btn-sm { height: 30px; padding: 0 0.625rem; font-size: 11px; }
+
+  /* A segmented control — the preset time ranges on four pages. `aria-pressed`
+     carries the state, so the styling and the accessibility tree cannot say
+     different things, which is what a `.active` class lets them do. */
+  .chip {
+    height: 38px;
+    padding: 0 0.75rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    background: var(--surface-1);
+    color: var(--ink-3);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .chip:hover { border-color: var(--line-2); color: var(--ink-2); }
+  .chip[aria-pressed="true"] {
+    border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+    color: var(--brand);
+    background: var(--brand-dim);
+  }
+
+  /* The filter row. dataviz: one filter row above everything it scopes —
+     never a filter inside a chart card. */
+  .filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    height: 38px;
+    padding: 0 0.875rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--line);
+    background: var(--surface-1);
+    transition: border-color 0.2s ease;
+  }
+  .field:focus-within, .field:hover { border-color: var(--line-2); }
+  .field select, .field input {
+    background: transparent;
+    border: none;
+    color: var(--ink-1);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .field select:focus, .field input:focus { outline: none; }
+
+  /* ---- Table ---------------------------------------------------------- */
+  /*
+     F-24 §7: sticky headers everywhere, and horizontal scroll INSIDE the table
+     only — never on the body. `.tbl-wrap` is the only thing allowed to scroll
+     sideways, and it is always the table's own parent.
+  */
+
+  .tbl-wrap {
+    overflow-x: auto;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tbl { width: 100%; text-align: left; border-collapse: separate; border-spacing: 0; }
+
+  .tbl thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface-2);
+    color: var(--ink-3);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.75rem 1rem;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tbl tbody td {
+    padding: 0.75rem 1rem;
+    font-size: 12px;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+
+  .tbl tbody tr:last-child td { border-bottom: none; }
+  .tbl tbody tr.row-link { cursor: pointer; }
+  .tbl tbody tr.row-link:hover td { background: var(--surface-2); }
+
+  /* dashboard-design: right-align numbers so a column can be scanned. Tabular
+     figures here — this is exactly the case the hero-number rule excludes. */
+  .tbl .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-1);
     font-weight: 600;
   }
 
-  .prose-chat ul {
-    list-style-type: disc;
-    margin-left: 1.5rem;
-    margin-top: 0.5rem;
-    margin-bottom: 0.5rem;
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
   }
 
-  .prose-chat p {
-    margin-bottom: 0.75rem;
+  /* The second header row some tables carry: filter controls, not labels. It
+     sticks below the label row rather than at the top, so both stay visible. */
+  .tbl thead tr.filter-row th,
+  .tbl thead tr.filter-row td {
+    position: sticky;
+    top: 37px;
+    z-index: 2;
+    background: var(--surface-2);
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--line);
   }
 
-  .prose-chat p:last-child {
-    margin-bottom: 0;
+  /* A section header inside a table — the category bands on the errors page. */
+  .tbl tbody tr.group-head td {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line-2);
+    padding: 0.625rem 1rem;
+    position: sticky;
+    top: 37px;
+    z-index: 1;
   }
-  
-  /* Skeleton Overlays */
+
+  /* ---- Empty and loading are different states ------------------------- */
+  /*
+     F-24 §1: "empty ≠ zero" and "a distinct loading state, not the same as
+     empty". A chart with no data used to paint an empty grid, which reads as a
+     measured zero. These two classes are the difference, and both say a
+     sentence rather than showing a blank.
+  */
+
+  .state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    text-align: center;
+    padding: 1rem;
+    background: var(--surface-1);
+    border-radius: inherit;
+    z-index: 5;
+  }
+
+  .state-icon { font-size: 1.25rem; color: var(--ink-3); opacity: 0.7; }
+  .state-title { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+  .state-note { font-size: 11px; color: var(--ink-3); max-width: 34ch; line-height: 1.5; }
+
+  /* Held at reduced opacity rather than replaced, so a refetch does not flash
+     a skeleton over a chart that already has a perfectly good render on it. */
+  .is-refetching { opacity: 0.45; transition: opacity 0.2s ease; pointer-events: none; }
+
+  /* ---- Skeletons ------------------------------------------------------- */
+
   .sk {
-    background: linear-gradient(90deg, #242424 25%, #2e2e2e 50%, #242424 75%);
+    background: linear-gradient(90deg, var(--surface-1) 25%, var(--surface-3) 50%, var(--surface-1) 75%);
     background-size: 200% auto;
     animation: sk-shimmer 1.6s linear infinite;
-    border-radius: 4px;
+    border-radius: var(--r-sm);
   }
 
   .sk-overlay {
     position: absolute;
     inset: 0;
-    background: #222222;
+    background: var(--surface-1);
     z-index: 10;
     border-radius: inherit;
     display: flex;
@@ -136,41 +530,284 @@
     transition: opacity 0.5s ease;
   }
 
-  .sk-overlay.done {
+  .sk-overlay.done { opacity: 0; pointer-events: none; }
+  .sk-overlay.sk-kpi { justify-content: flex-start; padding: 20px; gap: 12px; }
+
+  .sk-bars { display: flex; align-items: flex-end; gap: 5px; flex: 1; }
+  .sk-bars > .sk-bar { flex: 1; min-width: 0; border-radius: 4px 4px 0 0; }
+
+  /* ---- App shell (F-24 §2) --------------------------------------------- */
+  /*
+     Navigation was a dropdown — on desktop too. Six destinations behind a
+     click, and "where am I" was a background colour on an element you could
+     not see until you opened the menu. dashboard-design's macro layout is a
+     CSS grid: persistent rail, content beside it.
+  */
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    min-height: 100vh;
+    transition: grid-template-columns 0.22s ease;
+  }
+  .shell[data-collapsed="true"] { grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr); }
+
+  .shell-nav {
+    background: var(--surface-1);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  .shell-main { min-width: 0; padding: 1.5rem; }
+
+  .nav-item {
+    --nav-item-inset: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0.75rem;
+    margin: 0 var(--nav-item-inset);
+    border-radius: var(--r-md);
+    color: var(--ink-3);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  /*
+     `<a class="nav-item">` is a block box in normal flow, so its `auto`
+     inline-size already fills the row and subtracts the margin above for
+     free — that is where every other item's full-width hover strip and hit
+     target come from. `<button>` doesn't get that: form controls size to
+     `fit-content` even once `display: flex` makes them block-level (the CSS
+     Sizing spec carves out automatic sizing for form elements specifically),
+     so a bare `.nav-item` button shrinks to its icon+label instead of the row.
+
+     The former fix was Tailwind's `w-full` in the markup — `width: 100%` of
+     the row, added ON TOP of the same margin rather than instead of it, which
+     put 16px more on the button than the row actually had: a real horizontal
+     scrollbar in the nav's scroll container, and — collapsed, where that
+     16px is worse than it sounds against a 48px row — the two icons sitting
+     8px off the centre line every other icon collapses to.
+
+     `--nav-item-inset` is the one number both rules read, so the margin and
+     this compensation cannot drift apart the way a hand-written `0.5rem` on
+     each side of the relationship eventually would.
+  */
+  button.nav-item { width: calc(100% - (var(--nav-item-inset) * 2)); }
+  .nav-item:hover { background: var(--surface-2); color: var(--ink-1); }
+
+  /* Current page. `aria-current="page"` drives it, so the visual state and the
+     screen-reader state are the same fact. */
+  .nav-item[aria-current="page"] {
+    background: var(--brand-dim);
+    color: var(--brand);
+  }
+  .nav-item[aria-current="page"] .nav-icon { color: var(--brand); }
+
+  .nav-icon { width: 18px; text-align: center; flex: none; font-size: 14px; }
+
+  /* Collapsed: the label goes, the icon and the hit target stay. */
+  .shell[data-collapsed="true"] .nav-label { display: none; }
+  .shell[data-collapsed="true"] .nav-item { justify-content: center; padding-inline: 0; }
+
+  .nav-section {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    padding: 0.75rem 1.25rem 0.375rem;
+  }
+
+  /*
+     Collapsed, "Analyse" / "Act" / "Data" no longer fit — but the grouping
+     they named is still true, and three unbroken columns of icons read as one
+     list where before there were three. Rather than `display:none`, the
+     heading collapses to a 1px rule at the same rhythm the label used to sit
+     at: the group boundary survives even though its name does not fit.
+
+     The text stays in the DOM and un-hidden from assistive tech (nothing here
+     is `display:none`, `visibility:hidden`, or `aria-hidden`) — a screen
+     reader still gets "Analyse", "Act", "Data" between the links, which
+     sighted users lose in exchange for the pixel row.
+  */
+  .shell[data-collapsed="true"] .nav-section {
+    height: 1px;
+    margin: 0.625rem 1rem 0.5rem;
+    padding: 0;
+    overflow: hidden;
+    background: var(--line-2);
+  }
+  /* The rail's own top edge needs no divider above the first group. */
+  .shell[data-collapsed="true"] .nav-section:first-child { display: none; }
+
+  /* Mobile: the rail becomes a drawer over the content. */
+  @media (max-width: 1023px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    .shell-nav {
+      position: fixed;
+      inset-block: 0;
+      inset-inline-start: 0;
+      width: var(--sidebar-w);
+      z-index: 60;
+      transform: translateX(-100%);
+      transition: transform 0.22s ease;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+    }
+    .shell[data-drawer="open"] .shell-nav { transform: translateX(0); }
+    .shell-main { padding: 1rem; }
+  }
+
+  .nav-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 55;
     opacity: 0;
     pointer-events: none;
+    transition: opacity 0.22s ease;
   }
+  .shell[data-drawer="open"] .nav-scrim { opacity: 1; pointer-events: auto; }
+  @media (min-width: 1024px) { .nav-scrim { display: none; } }
 
-  .sk-overlay.sk-kpi {
-    justify-content: flex-start;
-    padding: 20px;
-    gap: 12px;
+  /* ---- Collapse handle -------------------------------------------------- */
+  /*
+     The control sits ON the rail's edge, half in the rail and half in the
+     content — which is why it is a child of `.shell` and not of `.shell-nav`.
+     The rail is `overflow: hidden` and has to be, or the labels spill out of
+     it while the column animates; a handle inside it would be clipped straight
+     down its middle.
+
+     It replaces the button that used to live in the brand row, which had two
+     faults that came from the same place. It carried `nav-wide`, so collapsing
+     the rail hid the only control that could expand it again — collapse was a
+     one-way door. And its arrow was flipped imperatively on click, so a rail
+     restored from localStorage came back collapsed with the arrow still
+     pointing left. Here the direction is a rotation keyed off `data-collapsed`,
+     so the arrow is not a second record of the state that can disagree with
+     the first.
+
+     `position: fixed`, not `absolute`. The visual rail is `position: sticky;
+     top: 0; height: 100vh` — pinned to the viewport regardless of where the
+     page has scrolled to — so the handle needs the same frame of reference.
+     Positioned against `.shell` instead, `top` would be measured from the top
+     of that (unpinned, page-scrolling) container, and header.js's pointer
+     tracking — which writes `e.clientY`, a viewport coordinate — would drift
+     out from under the rail the moment the page scrolled.
+  */
+  .nav-handle {
+    position: fixed;
+    left: var(--sidebar-w);
+    /* Vertical-centre default for the instant before the pointer has ever
+       been over the nav band — header.js overwrites this with the cursor's Y
+       on every move across it. No transition on `top`: this is a thing that
+       tracks the pointer, and a pointer that outruns what it is dragging
+       reads as broken, not as smooth. */
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 999px;
+    border: 1px solid var(--line-2);
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font-size: 9px;
+    z-index: 30;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, left 0.22s ease,
+                background-color 0.15s ease, color 0.15s ease;
   }
+  .shell[data-collapsed="true"] .nav-handle { left: var(--sidebar-w-collapsed); }
 
-  .sk-bars {
-    display: flex;
-    align-items: flex-end;
-    gap: 5px;
-    flex: 1;
+  .nav-handle i { transition: transform 0.22s ease; }
+  .shell[data-collapsed="true"] .nav-handle i { transform: rotate(180deg); }
+
+  /*
+     Revealed by hovering the rail. `pointer-events` follows the opacity, or an
+     invisible 22px target parks over the first column of the content and eats
+     clicks meant for it.
+
+     Both selectors are needed to cross onto it: the handle is painted above
+     the rail, so the moment the pointer reaches it `.shell-nav:hover` stops
+     matching and `.nav-handle:hover` has to carry the state, otherwise the
+     thing vanishes from under the cursor on its way to being clicked.
+  */
+  .shell-nav:hover ~ .nav-handle,
+  .shell-nav:focus-within ~ .nav-handle,
+  .nav-handle:hover,
+  .nav-handle:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
   }
+  .nav-handle:hover { background: var(--surface-3); color: var(--ink-1); }
+  .nav-handle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
-  .sk-bars > .sk-bar {
-    flex: 1;
-    min-width: 0;
-    border-radius: 4px 4px 0 0;
+  /* Below lg the rail is a drawer over the content; there is no column to
+     narrow, so there is nothing for this to do. */
+  @media (max-width: 1023px) { .nav-handle { display: none; } }
+
+  /* ---- Breadcrumb (F-16's last open piece) ----------------------------- */
+
+  .crumbs { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 11px; }
+  .crumbs a { color: var(--ink-3); }
+  .crumbs a:hover { color: var(--ink-1); text-decoration: underline; }
+  .crumbs [aria-current="page"] { color: var(--ink-1); font-weight: 600; }
+  .crumbs .sep { color: var(--ink-3); opacity: 0.5; }
+
+  /* ---- Chat markdown --------------------------------------------------- */
+
+  .prose-chat table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 11px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: var(--r-md);
+  }
+  .prose-chat th {
+    background: color-mix(in srgb, var(--series-7) 12%, transparent);
+    padding: 8px;
+    border: 1px solid var(--line);
+    text-align: left;
+    color: var(--series-7);
+    white-space: nowrap;
+  }
+  .prose-chat td { padding: 8px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+  .prose-chat strong { color: var(--ink-1); font-weight: 600; }
+  .prose-chat ul { list-style-type: disc; margin-left: 1.5rem; margin-block: 0.5rem; }
+  .prose-chat p { margin-bottom: 0.75rem; }
+  .prose-chat p:last-child { margin-bottom: 0; }
+
+  .tab-btn.active {
+    border-bottom: 2px solid var(--brand);
+    color: var(--brand);
   }
 }
 
 @layer utilities {
-  .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+  .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
   .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-  .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
-  
+
   .filter-active-glow {
-    background: linear-gradient(135deg, rgba(39, 130, 80, 0.4) 0%, rgba(23, 23, 23, 0.4) 100%) !important;
-    border-color: rgba(74, 222, 128, 0.5) !important;
-    box-shadow: 0 0 20px -5px rgba(39, 130, 80, 0.3);
+    background: color-mix(in srgb, var(--good-mark) 22%, transparent) !important;
+    border-color: color-mix(in srgb, var(--good-mark) 50%, transparent) !important;
+    box-shadow: 0 0 20px -5px color-mix(in srgb, var(--good-mark) 40%, transparent);
     transition: all 0.3s ease;
   }
 
@@ -178,14 +815,34 @@
     animation: filter-pulse 1.5s ease-in-out infinite !important;
     pointer-events: none;
   }
+
+  /* Screen-reader-only, for the table-view twin every chart needs and for the
+     "skip to content" link the sidebar makes necessary. */
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+  .focus\:not-sr-only:focus {
+    position: static;
+    width: auto; height: auto;
+    padding: 0.5rem 0.875rem; margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
 }
 
 @keyframes sk-shimmer {
-    to { background-position: 200% center; }
+  to { background-position: 200% center; }
 }
 
 @keyframes filter-pulse {
-    0% { border-color: rgba(74, 222, 128, 0.1); box-shadow: 0 0 5px rgba(39, 130, 80, 0.1); }
-    50% { border-color: rgba(74, 222, 128, 0.5); box-shadow: 0 0 20px rgba(39, 130, 80, 0.3); }
-    100% { border-color: rgba(74, 222, 128, 0.1); box-shadow: 0 0 5px rgba(39, 130, 80, 0.1); }
+  0%   { border-color: color-mix(in srgb, var(--good-mark) 12%, transparent); box-shadow: 0 0 5px color-mix(in srgb, var(--good-mark) 12%, transparent); }
+  50%  { border-color: color-mix(in srgb, var(--good-mark) 50%, transparent); box-shadow: 0 0 20px color-mix(in srgb, var(--good-mark) 35%, transparent); }
+  100% { border-color: color-mix(in srgb, var(--good-mark) 12%, transparent); box-shadow: 0 0 5px color-mix(in srgb, var(--good-mark) 12%, transparent); }
 }

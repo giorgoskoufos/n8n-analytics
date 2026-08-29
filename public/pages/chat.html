@@ -1,1 +1,62 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>AI Analytics Chat</title>    <script src="../logic/guard.js"></script>    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">    <link rel="stylesheet" href="../css/styles.css">    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">    <link rel="manifest" href="../assets//site.webmanifest"></head><body class="bg-n8n-dark text-white">    <header class="bg-n8n-card border-b border-gray-800 p-4 shadow-md flex justify-between items-center z-10">        <div class="flex items-center gap-3">            <div class="bg-n8n-primary/20 w-10 h-10 flex items-center justify-center rounded-lg border border-n8n-primary/30 shadow-inner">                <img src="../assets/n8n_db.svg" alt="n8n logo" class="w-6 h-6 object-contain">            </div>            <div>                <h1 class="text-lg font-bold">n8n Data Analyst</h1>                <p class="text-xs text-gray-400">Powered by AI</p>            </div>        </div>        <div class="flex items-center gap-3">            <button data-action="logout" class="text-gray-400 hover:text-white transition-colors text-sm flex items-center gap-1">                <i class="fa-solid fa-right-from-bracket fa-fw"></i>Logout            </button>            <button data-action="closeWindow" class="text-gray-400 hover:text-white transition-colors text-sm flex items-center gap-1">                <i class="fa-solid fa-xmark fa-fw"></i>Close            </button>        </div>    </header>    <main id="chatBox" class="chat-container p-4 md:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">        <div class="flex gap-4 items-start">            <div class="bg-indigo-600/20 border border-indigo-500/30 w-10 h-10 shrink-0 flex items-center justify-center rounded-full mt-1">                <i class="fa-solid fa-robot fa-fw text-indigo-400 text-lg"></i>            </div>            <div class="bg-n8n-card border border-gray-800 p-4 rounded-2xl rounded-tl-none max-w-[85%] shadow-sm">                <p class="text-sm leading-relaxed">Hi! I'm your AI assistant. I can analyze your n8n database and give you insights.<br><br>Try asking me:<br><span class="text-gray-400 italic">"Which workflow had the most errors yesterday?"</span></p>            </div>        </div>    </main>    <footer class="bg-n8n-dark border-t border-gray-800 p-4 shrink-0">        <div class="max-w-4xl mx-auto relative">            <textarea id="userInput" rows="1" placeholder="Ask something about your data..."                       class="block w-full bg-n8n-card border border-gray-700 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-indigo-500 resize-none overflow-hidden transition-all"></textarea>            <button id="sendBtn" class="absolute right-2 bottom-2 w-8 h-8 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">                <i class="fa-solid fa-paper-plane fa-fw text-sm"></i>            </button>        </div>        <p class="text-center text-xs text-gray-500 mt-3">AI can make mistakes. Always verify the results.</p>    </footer>    <script src="../logic/global_functions.js"></script><script type="module" src="../logic/app.js"></script>    <script src="../logic/chat.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analytics Chat</title>
+    <script src="../logic/guard.js"></script>
+    <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
+    <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="../css/styles.css">
+    <link rel="icon" type="image/svg+xml" href="../assets/n8n_db.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+    <link rel="manifest" href="../assets//site.webmanifest">
+</head>
+<body class="bg-n8n-dark text-white">
+    <header class="bg-n8n-card border-b border-line p-4 shadow-md flex justify-between items-center z-10">
+        <div class="flex items-center gap-3">
+            <div class="bg-n8n-primary/20 w-10 h-10 flex items-center justify-center rounded-lg border border-n8n-primary/30 shadow-inner">
+                <img src="../assets/n8n_db.svg" alt="n8n logo" class="w-6 h-6 object-contain">
+            </div>
+            <div>
+                <h1 class="text-lg font-bold">n8n Data Analyst</h1>
+                <p class="text-xs text-ink-2">Powered by AI</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-3">
+            <button data-action="logout" class="text-ink-2 hover:text-white transition-colors text-sm flex items-center gap-1">
+                <i class="fa-solid fa-right-from-bracket fa-fw"></i>Logout
+            </button>
+            <button data-action="closeWindow" class="text-ink-2 hover:text-white transition-colors text-sm flex items-center gap-1">
+                <i class="fa-solid fa-xmark fa-fw"></i>Close
+            </button>
+        </div>
+    </header>
+    <main id="chatBox" class="chat-container p-4 md:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
+        <div class="flex gap-4 items-start">
+            <div class="bg-indigo-600/20 border border-indigo-500/30 w-10 h-10 shrink-0 flex items-center justify-center rounded-full mt-1">
+                <i class="fa-solid fa-robot fa-fw text-indigo-400 text-lg"></i>
+            </div>
+            <div class="bg-n8n-card border border-line p-4 rounded-2xl rounded-tl-none max-w-[85%] shadow-sm">
+                <p class="text-sm leading-relaxed">Hi! I'm your AI assistant. I can analyze your n8n database and give you insights.<br><br>Try asking me:<br><span class="text-ink-2 italic">"Which workflow had the most errors yesterday?"</span></p>
+            </div>
+        </div>
+    </main>
+    <footer class="bg-n8n-dark border-t border-line p-4 shrink-0">
+        <div class="max-w-4xl mx-auto relative">
+            <textarea id="userInput" rows="1" placeholder="Ask something about your data..." 
+                      class="block w-full bg-n8n-card border border-line-2 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-indigo-500 resize-none overflow-hidden transition-all"></textarea>
+            <button id="sendBtn" class="absolute right-2 bottom-2 w-8 h-8 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                <i class="fa-solid fa-paper-plane fa-fw text-sm"></i>
+            </button>
+        </div>
+        <p class="text-center text-xs text-ink-3 mt-3">AI can make mistakes. Always verify the results.</p>
+    </footer>
+    <script src="../logic/global_functions.js"></script>
+    <script src="../logic/ui/components.js"></script>
+    <script src="../logic/chat-core.js"></script><script type="module" src="../logic/app.js"></script>
+    <script src="../logic/chat.js"></script>
+</body>
+</html>

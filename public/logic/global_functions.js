@@ -109,7 +109,17 @@ const DISPATCHABLE_ACTIONS = [
     'newAlertChannel', 'editAlertChannel', 'deleteAlertChannel', 'toggleAlertChannel',
     'testAlertChannel', 'runAlertsNow', 'closeAlertEditor', 'saveAlertEditor',
     // Error lifecycle (F-15)
-    'setFingerprintStatus'
+    'setFingerprintStatus',
+    // App shell (F-24 §2)
+    'toggleNavCollapse', 'openNavDrawer', 'closeNavDrawer',
+    // Error intelligence (F-24 §3)
+    'filterRelabelled', 'clearErrorFilters',
+    // Alert channel headers and cURL (F-24 §4)
+    'addAlertHeader', 'removeAlertHeader', 'importAlertCurl', 'exportAlertCurl',
+    // Settings navigation (F-24 §2)
+    'showSettingsSection', 'showInsightsGroup',
+    // Trace panel, now on the Slowest tab too (F-24 §5)
+    'openTrace', 'closeTraceModal'
 ];
 
 window.closeWindow = function () { window.close(); };

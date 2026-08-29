@@ -3,6 +3,7 @@ const { parseDateRange, parseExecutionMode } = require('../utils/validate');
 const { scopeClause } = require('../utils/scope');
 const { groupingClause } = require('../utils/grouping');
 const log = require('../utils/logger').logger('API');
+const queueLagDao = require('../dao/queueLagDao');
 
 /**
  * The questions F-01 made answerable.
@@ -155,33 +156,6 @@ function restrict(req, column) {
     };
 }
 
-/**
- * `mode` filter fragment. Returns { ok: false, error } for an unknown mode.
- * The vocabulary lives in validate.js, shared with the endpoints in
- * metricsController that take the same parameter.
- */
-function modeFilter(value) {
-    const parsed = parseExecutionMode(value);
-    if (!parsed.ok) return parsed;
-    return parsed.mode
-        ? { ok: true, sql: ' AND e.mode = ?', params: [parsed.mode] }
-        : { ok: true, sql: '', params: [] };
-}
-
-/**
- * Percentiles by nearest rank, in SQL.
- *
- * SQLite ships no percentile function, so the rank is computed with a window
- * function and the row at that rank is picked out with a conditional MAX. The
- * index `1 + CAST((n - 1) * p AS INTEGER)` is always within [1, n], including
- * when n is 1 — a percentile over a nearly empty bucket is exactly where an
- * off-by-one turns into a NULL that the chart draws as zero.
- */
-function percentileColumns(valueAlias) {
-    const at = (p) => `MAX(CASE WHEN rn = 1 + CAST((n - 1) * ${p} AS INTEGER) THEN ${valueAlias} END)`;
-    return `${at(0.5)} AS p50, ${at(0.95)} AS p95, ${at(0.99)} AS p99`;
-}
-
 // ==========================================================================
 // F-02 · Analysis by trigger type
 // ==========================================================================
@@ -286,121 +260,29 @@ exports.getTriggerBreakdown = async (req, res) => {
  */
 exports.getQueueLag = async (req, res) => {
     try {
+        // Everything here is HTTP: read the request, validate it, decide the
+        // 400s. The analysis itself is in dao/queueLagDao — one place, called
+        // by this handler and by the AI assistant with the same domain values.
         const win = resolveWindow(req);
         if (!win.ok) return res.status(400).json({ error: win.error });
 
-        const mode = modeFilter(req.query.mode);
+        const mode = parseExecutionMode(req.query.mode);
         if (!mode.ok) return res.status(400).json({ error: mode.error });
 
-        const scope = restrict(req, 'e."workflowId"');
-        if (!scope.ok) return res.status(400).json({ error: scope.error });
-        const base = `
-              FROM execution_entity e
-             WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-               AND e."createdAt" IS NOT NULL${mode.sql}${scope.sql}`;
-        const params = [win.startIso, win.endIso, ...mode.params, ...scope.params];
-        const lag = msBetween('e."startedAt"', 'e."createdAt"');
+        const grouping = groupingClause(req.query, 'e."workflowId"');
+        if (!grouping.ok) return res.status(400).json({ error: grouping.error });
 
-        // Negative lag is impossible — an execution cannot start before it is
-        // created — so any is clock skew between whatever wrote the two columns.
-        // Counted and reported rather than clamped away: a silent MAX(0, ...)
-        // would turn a real infrastructure fault into a clean-looking chart.
-        const summaryQuery = `
-            WITH v AS (SELECT ${lag} AS ms ${base}),
-                 r AS (SELECT ms, ROW_NUMBER() OVER (ORDER BY ms) rn, COUNT(*) OVER () n FROM v)
-            SELECT n, ${percentileColumns('ms')}, MAX(ms) AS max_ms, AVG(ms) AS avg_ms,
-                   SUM(CASE WHEN ms < 0 THEN 1 ELSE 0 END) AS negative
-              FROM r GROUP BY n`;
-
-        const byModeQuery = `
-            WITH v AS (SELECT e.mode AS mode, ${lag} AS ms ${base} AND e.mode IS NOT NULL),
-                 r AS (SELECT mode, ms,
-                              ROW_NUMBER() OVER (PARTITION BY mode ORDER BY ms) rn,
-                              COUNT(*) OVER (PARTITION BY mode) n
-                         FROM v)
-            SELECT mode, n, ${percentileColumns('ms')}, MAX(ms) AS max_ms
-              FROM r GROUP BY mode, n ORDER BY n DESC`;
-
-        const seriesQuery = `
-            WITH v AS (SELECT ${bucketExpr} AS bucket_idx, ${lag} AS ms ${base}),
-                 r AS (SELECT bucket_idx, ms,
-                              ROW_NUMBER() OVER (PARTITION BY bucket_idx ORDER BY ms) rn,
-                              COUNT(*) OVER (PARTITION BY bucket_idx) n
-                         FROM v)
-            SELECT bucket_idx, n, ${percentileColumns('ms')}, MAX(ms) AS max_ms
-              FROM r GROUP BY bucket_idx, n`;
-
-        const [summary, byMode, seriesRows, coverage] = await Promise.all([
-            localDb.query(summaryQuery, params),
-            localDb.query(byModeQuery, params),
-            localDb.query(seriesQuery, [...bucketParams(win), ...params]),
-            coverageOf(scope, win, 'createdAt')
-        ]);
-
-        const series = densify(win, seriesRows.rows, (row) => ({
-            n: row ? row.n : 0,
-            p50: row ? row.p50 : null,
-            p95: row ? row.p95 : null,
-            p99: row ? row.p99 : null,
-            max_ms: row ? row.max_ms : null
+        res.json(await queueLagDao.getQueueLag({
+            window: win,
+            mode: mode.mode,
+            scope: req.scope,
+            grouping: req.query
         }));
-
-        res.json({
-            window: { start: win.startIso, end: win.endIso, step_ms: win.stepMs },
-            coverage,
-            summary: summary.rows[0] ||
-                { n: 0, p50: null, p95: null, p99: null, max_ms: null, avg_ms: null, negative: 0 },
-            byMode: byMode.rows,
-            series,
-            backpressure: detectBackpressure(series)
-        });
     } catch (err) {
         log.error(err);
         res.status(500).json({ error: 'Failed to fetch queue lag' });
     }
 };
-
-/**
- * Lag climbing while throughput does not.
- *
- * Lag rising alongside volume is a busy instance behaving correctly. Lag rising
- * while volume is flat or falling is the queue draining slower than it fills,
- * and that is the one worth a warning — it is the shape that precedes a backlog.
- *
- * Compares the last quarter of the window against the first three quarters, and
- * requires both a large relative jump and enough samples on each side for the
- * comparison to mean anything.
- */
-function detectBackpressure(series) {
-    const withData = series.filter((p) => p.n > 0 && p.p95 !== null);
-    if (withData.length < 8) return { detected: false, reason: 'not enough buckets to compare' };
-
-    const cut = Math.floor(withData.length * 0.75);
-    const baseline = withData.slice(0, cut);
-    const recent = withData.slice(cut);
-    if (baseline.length === 0 || recent.length === 0) {
-        return { detected: false, reason: 'not enough buckets to compare' };
-    }
-
-    const mean = (rows, key) => rows.reduce((a, r) => a + (r[key] || 0), 0) / rows.length;
-    const baseLag = mean(baseline, 'p95');
-    const recentLag = mean(recent, 'p95');
-    const baseVol = mean(baseline, 'n');
-    const recentVol = mean(recent, 'n');
-
-    // A floor on the baseline: at single-digit milliseconds a doubling is noise,
-    // not pressure.
-    const lagRatio = baseLag > 5 ? recentLag / baseLag : 1;
-    const volRatio = baseVol > 0 ? recentVol / baseVol : 1;
-
-    return {
-        detected: lagRatio >= 1.5 && volRatio <= 1.1,
-        lag_ratio: Math.round(lagRatio * 100) / 100,
-        volume_ratio: Math.round(volRatio * 100) / 100,
-        baseline_p95_ms: baseLag,
-        recent_p95_ms: recentLag
-    };
-}
 
 // ==========================================================================
 // F-04 · Database growth
@@ -2045,5 +1927,9 @@ exports.getSystemHealth = async (req, res) => {
 // Exported for the tests, which assert on the arithmetic rather than on a
 // rendered number.
 exports._internal = {
-    resolveWindow, densify, detectBackpressure, forecast, sweepConcurrency, growthFrom
+    resolveWindow, densify, forecast, sweepConcurrency, growthFrom,
+    // Moved to dao/queueLagDao with the query it belongs to. Re-exported, not
+    // reimplemented — the tests assert on the arithmetic, and there must go on
+    // being exactly one copy of it to assert against.
+    detectBackpressure: queueLagDao._internal.detectBackpressure
 };

@@ -30,7 +30,7 @@ window.setConcPreset = (hours) => {
     const btn = document.getElementById('btnConc24h');
     if (btn) {
         btn.classList.add('bg-indigo-600/20', 'text-indigo-400');
-        btn.classList.remove('bg-gray-800/40', 'text-gray-400');
+        btn.classList.remove('bg-gray-800/40', 'text-ink-2');
     }
 
     fetchConcurrency(null); // Fetch rolling 24h
@@ -51,7 +51,7 @@ window.toggleArchived = function () {
     const btn = document.getElementById('archivedToggle');
     if (btn) {
         btn.classList.toggle('text-indigo-300', window.showArchived);
-        btn.classList.toggle('text-gray-600', !window.showArchived);
+        btn.classList.toggle('text-ink-3', !window.showArchived);
         btn.title = window.showArchived ? 'Hide archived workflows' : 'Show archived workflows';
     }
     populateDropdown(window.lastTopWorkflows);
