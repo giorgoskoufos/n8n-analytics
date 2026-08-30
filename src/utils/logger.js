@@ -56,7 +56,9 @@
  *                                     component still reaches the file, and
  *                                     warn/error from ANY component still
  *                                     reaches the console regardless of this
- *                                     list.
+ *                                     list. Set to `*` to mirror the file onto
+ *                                     the console too — the file and the
+ *                                     console are never a forced either/or.
  *   LOG_FILE                         path to the json-lines file, or `off` to
  *                                     disable it outright. Defaults to a
  *                                     `logs/` folder beside the SQLite replica.
@@ -83,9 +85,18 @@ const format = (process.env.LOG_FORMAT || '').toLowerCase() ||
  * Matched against the part of a component name before a `:` — `logger('SYNC')`
  * and a future `logger('SYNC').child('ANALYTICS')` (component `SYNC:ANALYTICS`)
  * both match an allowlist entry of `SYNC`.
+ *
+ * `LOG_CONSOLE_COMPONENTS=*` is the escape hatch, and it exists so the file and
+ * the console are never a forced either/or. The default keeps the console a
+ * short narrative for ordinary operation; `*` mirrors the file onto it as
+ * well — every component, every level, exactly what the console showed before
+ * this file sink existed — for a session where you actually want to watch
+ * everything go by (debugging locally, chasing something live). The file
+ * itself never depends on this: it always gets everything, either way.
  */
+const CONSOLE_ALL = (process.env.LOG_CONSOLE_COMPONENTS || '').trim() === '*';
 const consoleComponents = new Set(
-    (process.env.LOG_CONSOLE_COMPONENTS || 'SYNC,SERVER,LOCK')
+    CONSOLE_ALL ? [] : (process.env.LOG_CONSOLE_COMPONENTS || 'SYNC,SERVER,LOCK')
         .split(',')
         .map((s) => s.trim().toUpperCase())
         .filter(Boolean)
@@ -118,6 +129,98 @@ function redact(value, depth = 0) {
 // worse than no colour at all.
 const COLOURS = { error: '\x1b[31m', warn: '\x1b[33m', info: '\x1b[36m', debug: '\x1b[90m' };
 const RESET = '\x1b[0m';
+
+/**
+ * Colour for one field's value in the pretty format, independent of the line's
+ * level — a slow-but-successful request is still `info`, and colouring its
+ * `ms` is what makes it catch the eye without bumping the whole line to warn.
+ *
+ * Generic by field NAME rather than scoped to one caller, so anything that logs
+ * a `status` or `ms` gets this for free — `HTTP` has both on every request,
+ * `SYNC` has `ms` on every pass ("ETL pass ok" `ms=4070`), and a future caller
+ * needs no changes here to pick it up.
+ */
+const FIELD_COLOURS = { green: '\x1b[32m', yellow: '\x1b[33m', red: '\x1b[31m', cyan: '\x1b[36m' };
+
+function fieldColour(key, value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+
+    if (key === 'status') {
+        if (n >= 500) return FIELD_COLOURS.red;
+        if (n >= 400) return FIELD_COLOURS.yellow;
+        if (n >= 300) return FIELD_COLOURS.cyan;
+        if (n >= 200) return FIELD_COLOURS.green;
+        return null;
+    }
+    if (key === 'ms') {
+        // Fixed thresholds rather than reading SLOW_REQUEST_MS: that setting
+        // decides when a REQUEST is logged at warn, which is a business rule
+        // for one component. This is a generic "does this duration deserve a
+        // second look" for any `ms` field anywhere, and keeping it independent
+        // is what lets a SYNC pass duration and an HTTP request duration read
+        // on the same scale.
+        if (n >= 1000) return FIELD_COLOURS.red;
+        if (n >= 300) return FIELD_COLOURS.yellow;
+        return FIELD_COLOURS.green;
+    }
+    return null;
+}
+
+/**
+ * A field is redundant on the console when its value already appears, in
+ * plain sight, inside the line's own message.
+ *
+ * `requestLog.js` builds its message as `${method} ${path} ${status}` and
+ * ALSO puts `method`, `path` and `status` in the fields object — which used
+ * to mean every HTTP line printed those three twice: once in the message,
+ * once again as `method=GET path=/api/x status=200`. The second copy told the
+ * console nothing the first did not, at the cost of being the longest part of
+ * the line.
+ *
+ * Generic by VALUE rather than by field name — nothing here knows the word
+ * "HTTP" — so it drops whatever the message already said and nothing more:
+ * `id`, `user` and `ms` stay, because none of them appear in the message text.
+ * The guard on short values stops a coincidence like `ms=2` being swallowed by
+ * an unrelated "2" somewhere in an unrelated message.
+ */
+function isRedundant(value, message) {
+    const shown = fmt(value);
+    return shown.length >= 2 && message.includes(shown);
+}
+
+/**
+ * Bold, by-verb colour for an HTTP-request-shaped message — "GET /path 200"
+ * becomes a bold green GET and a green 200, the rest plain. Postman colours
+ * its method the same way, which is the specific look this was asked to
+ * match.
+ *
+ * Matched by SHAPE (`VERB /path 123`), not by component name — requestLog.js
+ * is the only thing that produces this shape today, but nothing here checks
+ * for it by name. The status half reuses `fieldColour('status', …)` rather
+ * than a second palette, so a 500 in the message and a 500 in a `status=`
+ * field (on a line where it was NOT redundant) are always the same red.
+ *
+ * This is also why `method`/`path`/`status` can drop out of the field list
+ * above without losing anything: the colour that was the point of having them
+ * moves onto the copy that is actually displayed.
+ */
+const HTTP_METHOD_DIM = '\x1b[90m'; // HEAD, OPTIONS, and anything else unlisted
+const METHOD_COLOURS = {
+    GET: '\x1b[32m', POST: '\x1b[33m', PUT: '\x1b[34m', PATCH: '\x1b[35m', DELETE: '\x1b[31m'
+};
+const BOLD = '\x1b[1m';
+const HTTP_MESSAGE = /^([A-Z]+) (\S+) (\d{3})$/;
+
+function colourHttpMessage(message) {
+    const m = HTTP_MESSAGE.exec(message);
+    if (!m) return message;
+    const [, method, requestPath, status] = m;
+    const methodColour = METHOD_COLOURS[method] || HTTP_METHOD_DIM;
+    const statusColour = fieldColour('status', status);
+    return `${BOLD}${methodColour}${method}${RESET} ${requestPath} ` +
+        (statusColour ? `${statusColour}${status}${RESET}` : status);
+}
 
 // ==========================================================================
 // The file sink
@@ -331,19 +434,33 @@ function emit(level, component, message, fields) {
     // component nobody put on the console list must not require someone to
     // already be tailing the file to find out about it.
     const base = component.split(':')[0].toUpperCase();
-    if (!consoleComponents.has(base) && level !== 'warn' && level !== 'error') return;
+    if (!CONSOLE_ALL && !consoleComponents.has(base) && level !== 'warn' && level !== 'error') return;
+
+    // stderr for problems, stdout for everything else — so `2>` separates them
+    // and an orchestrator's error stream means something. Decided before the
+    // line is built rather than after, because whether THIS write gets ANSI
+    // codes has to check the stream it is actually going to, not always
+    // stdout's — a shell that redirects one and not the other (`2>err.log`)
+    // would otherwise colour the wrong half.
+    const stream = level === 'error' || level === 'warn' ? process.stderr : process.stdout;
+    const isTTY = Boolean(stream.isTTY);
+
+    const shownFields = Object.entries(redact(fields || {}))
+        .filter(([, v]) => !isRedundant(v, entry.message));
 
     const line = format === 'json'
         ? jsonLine
-        : `${process.stdout.isTTY ? COLOURS[level] : ''}${level.toUpperCase().padEnd(5)}${process.stdout.isTTY ? RESET : ''} ` +
-          `[${component}] ${entry.message}` +
-          (fields && Object.keys(fields).length
-              ? ' ' + Object.entries(redact(fields)).map(([k, v]) => `${k}=${fmt(v)}`).join(' ')
+        : `${isTTY ? COLOURS[level] : ''}${level.toUpperCase().padEnd(5)}${isTTY ? RESET : ''} ` +
+          `[${component}] ${isTTY ? colourHttpMessage(entry.message) : entry.message}` +
+          (shownFields.length
+              ? ' ' + shownFields.map(([k, v]) => {
+                  const shown = fmt(v);
+                  const colour = isTTY ? fieldColour(k, v) : null;
+                  return colour ? `${k}=${colour}${shown}${RESET}` : `${k}=${shown}`;
+              }).join(' ')
               : '');
 
-    // stderr for problems, stdout for everything else — so `2>` separates them
-    // and an orchestrator's error stream means something.
-    (level === 'error' || level === 'warn' ? process.stderr : process.stdout).write(line + '\n');
+    stream.write(line + '\n');
 }
 
 function fmt(v) {

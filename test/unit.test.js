@@ -305,6 +305,162 @@ test('LOG_FILE=off disables the file sink cleanly, console unaffected', async ()
         });
 });
 
+test('LOG_CONSOLE_COMPONENTS=* mirrors the file onto the console — never a forced either/or', async () => {
+    // The console defaulting to a curated slice must not cost anyone the option
+    // to see everything live, same as it always could before this file sink
+    // existed. The wildcard is that option: every component, every level, on
+    // the console too, with the file completely unaffected either way.
+    const { dir, file } = tempLogDir('console-all');
+    try {
+        await withLogger({
+            LOG_FILE: file, LOG_CONSOLE_COMPONENTS: '*', LOG_FORMAT: 'json'
+        }, async ({ logger, flush }) => {
+            const captured = [];
+            const realWrite = process.stdout.write.bind(process.stdout);
+            process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
+            try {
+                // Not in any curated list, not warn/error — the case that stays
+                // silent by default.
+                logger('DAO').info('reading roi settings');
+            } finally {
+                process.stdout.write = realWrite;
+            }
+            await flush();
+            assert.match(captured.join(''), /reading roi settings/,
+                'the wildcard puts an ordinary info line from an arbitrary component on the console');
+
+            const written = fs.readFileSync(file, 'utf8').trim().split('\n');
+            assert.equal(written.length, 1, 'and the file still received it exactly once — not doubled');
+        });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+const ANSI = { green: '\x1b[32m', yellow: '\x1b[33m', red: '\x1b[31m', bold: '\x1b[1m', reset: '\x1b[0m' };
+
+/** Runs `fn` with process.stdout.isTTY forced true, then restores it — even on throw. */
+async function withForcedTTY(fn) {
+    const prior = process.stdout.isTTY;
+    process.stdout.isTTY = true;
+    try {
+        return await fn();
+    } finally {
+        process.stdout.isTTY = prior;
+    }
+}
+
+/** Captures whatever `fn` writes to process.stdout while it runs. */
+async function captureStdout(fn) {
+    const captured = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
+    try {
+        await fn();
+    } finally {
+        process.stdout.write = realWrite;
+    }
+    return captured;
+}
+
+test('a field keeps its own colour when the message does not already say it', async () => {
+    // `ms` on a SYNC pass, not an HTTP line — the message ("ETL pass ok") does
+    // not repeat the number, so it stays a field and keeps the colour
+    // `fieldColour` gives it. This is deliberately independent of the
+    // HTTP-message special case below: `fieldColour` has to work for any
+    // component's `status`/`ms`, and this is the one that is NOT also
+    // duplicated into its own message.
+    await withLogger({ LOG_FORMAT: 'pretty', LOG_CONSOLE_COMPONENTS: '*' }, async ({ logger }) => {
+        const captured = await withForcedTTY(() => captureStdout(() => {
+            logger('SYNC').info('ETL pass ok', { ms: 5 });
+            logger('SYNC').info('ETL pass ok', { ms: 1200 });
+        }));
+        assert.ok(captured[0].includes(`ms=${ANSI.green}5${ANSI.reset}`), 'a fast pass is green');
+        assert.ok(captured[1].includes(`ms=${ANSI.red}1200${ANSI.reset}`),
+            'a slow one is red, though the LEVEL is still info');
+    });
+});
+
+test('an HTTP request line colours the method and status IN the message, and drops the duplicate fields', async () => {
+    // requestLog.js builds its message as `${method} ${path} ${status}` and
+    // ALSO puts method/path/status in the fields object, so the line used to
+    // say everything twice: once in the message, once again as
+    // `method=GET path=/api/x status=200`. Postman-style: the method is bold
+    // and coloured by verb, the status is coloured the same way `status=`
+    // used to be — just moved onto the copy that is actually shown — and the
+    // three duplicate fields are gone from the tail of the line. `ms`, `id`
+    // and `user` are NOT duplicated anywhere in the message, so they stay.
+    await withLogger({ LOG_FORMAT: 'pretty', LOG_CONSOLE_COMPONENTS: '*' }, async ({ logger }) => {
+        const captured = await withForcedTTY(() => captureStdout(() => {
+            logger('HTTP').info('GET /api/ai-tag-options 200', {
+                id: 'b0c1f63f', method: 'GET', path: '/api/ai-tag-options', status: 200,
+                ms: 2, user: 'u-1'
+            });
+        }));
+        const line = captured[0];
+
+        assert.ok(
+            line.includes(`[HTTP] ${ANSI.bold}${ANSI.green}GET${ANSI.reset} /api/ai-tag-options ` +
+                `${ANSI.green}200${ANSI.reset}`),
+            `method bold+green, status green, in the message: ${line}`
+        );
+        assert.ok(!line.includes('method='), 'method= no longer echoed — the message already said it');
+        assert.ok(!line.includes('path='), 'path= no longer echoed');
+        assert.ok(!line.includes('status='), 'status= no longer echoed');
+        assert.ok(line.includes('id=b0c1f63f'), 'id is not in the message, so it stays');
+        assert.ok(line.includes('user=u-1'), 'user is not in the message, so it stays');
+        assert.ok(line.includes(`ms=${ANSI.green}2${ANSI.reset}`), 'ms stays too, and keeps its own colour');
+    });
+});
+
+test('a DELETE line is red like Postman colours it, and an unknown verb is dim rather than uncoloured', async () => {
+    await withLogger({ LOG_FORMAT: 'pretty', LOG_CONSOLE_COMPONENTS: '*' }, async ({ logger }) => {
+        const captured = await withForcedTTY(() => captureStdout(() => {
+            logger('HTTP').info('DELETE /api/ai-memories/3 204', {});
+            logger('HTTP').info('PURGE /api/x 200', {}); // not a real HTTP verb, but the shape still matches
+        }));
+        assert.ok(captured[0].includes(`${ANSI.bold}${ANSI.red}DELETE${ANSI.reset}`));
+        assert.ok(captured[1].includes(`${ANSI.bold}\x1b[90mPURGE${ANSI.reset}`),
+            'an unrecognised verb still gets bolded, dim rather than left plain');
+    });
+});
+
+test('the pretty format never leaks an escape code when stdout is not actually a terminal', async () => {
+    // The normal case for anything piped or redirected — must read exactly as
+    // plain text, because nothing downstream of a real pipe strips ANSI codes
+    // for you.
+    await withLogger({ LOG_FORMAT: 'pretty', LOG_CONSOLE_COMPONENTS: '*' }, async ({ logger }) => {
+        const captured = await captureStdout(() => {
+            logger('HTTP').info('GET /api/settings 200', { status: 200, ms: 5 });
+        });
+        assert.equal(captured.join('').includes('\x1b['), false);
+    });
+});
+
+test('the json file is never trimmed — every field survives, redundant or not', async () => {
+    // The console dropping method/path/status must not mean the FILE lost
+    // them too. The file is written from `entry` before any of the console
+    // filtering runs, and this is the assertion that keeps that true.
+    const { dir, file } = tempLogDir('http-file-complete');
+    try {
+        await withLogger({ LOG_FILE: file, LOG_CONSOLE_COMPONENTS: '*', LOG_FORMAT: 'pretty' },
+            async ({ logger, flush }) => {
+                logger('HTTP').info('GET /api/ai-tag-options 200', {
+                    id: 'b0c1f63f', method: 'GET', path: '/api/ai-tag-options', status: 200, ms: 2
+                });
+                await flush();
+                const entry = JSON.parse(fs.readFileSync(file, 'utf8').trim());
+                assert.equal(entry.method, 'GET');
+                assert.equal(entry.path, '/api/ai-tag-options');
+                assert.equal(entry.status, 200);
+                assert.equal(entry.ms, 2);
+                assert.equal(entry.id, 'b0c1f63f');
+            });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 // ----------------------------------------------------------------- error parser
 test('the error classifier suite passes', () => {
     // Kept as its own script rather than rewritten here: it is 47 cases built
