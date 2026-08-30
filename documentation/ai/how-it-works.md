@@ -30,7 +30,7 @@ window, the wrong workflow, a join that double-counts — the description of the
 wrong answer is just as fluent and confident as the description of a right one.
 You cannot tell from reading it.
 
-Here, the model picks one of twenty pre-written analyses. Each of them was
+Here, the model picks one of twenty-one pre-written analyses. Each of them was
 written once, is used by the dashboard's own pages, and is covered by tests.
 The model chooses *which* analysis and *what to narrow it to*; it does not get
 to decide what "error rate" means. When it picks the wrong analysis, you usually

@@ -23,8 +23,16 @@
   is up. A minimum that tracks the viewport does both jobs.
 -->
 
-<body class="min-h-[100dvh] flex items-center justify-center p-4">
-    <div class="bg-n8n-card border border-line rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-8">
+<body class="min-h-[100dvh] flex items-center justify-center p-4 relative overflow-hidden" style="background-color: var(--surface-0)">
+    <!-- Blurred workflow background -->
+    <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none" aria-hidden="true">
+        <div class="absolute -inset-4 bg-cover bg-center bg-no-repeat"
+            style="background-image: url('../assets/n8n_login_bg.png'); filter: blur(3px) brightness(0.4) saturate(1.05);">
+        </div>
+        <div class="absolute inset-0 bg-black/30"></div>
+    </div>
+
+    <div class="bg-n8n-card/90 backdrop-blur-xl border border-line rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-8 relative z-10">
         <div class="text-center mb-8">
             <div
                 class="bg-n8n-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-n8n-primary/30 shadow-lg shadow-n8n-primary/5">
