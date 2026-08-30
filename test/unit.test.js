@@ -722,7 +722,8 @@ test('the failing item index and sub-messages are extracted when present', () =>
 // The numbers are only worth printing if [9/13] means the same stage on every
 // run. Two ways that rots: a call site with a key nobody listed, or a duplicate
 // key so two stages share a number.
-const { PASS_STEPS } = require(path.join(ROOT, 'src/config/syncJob'));
+const { PASS_STEPS, batchLimitFor, EXEC_BATCH_LIMIT, ID_OVERLAP } =
+    require(path.join(ROOT, 'src/config/syncJob'));
 
 test('every numbered ETL step in the source is listed in PASS_STEPS', () => {
     const source = fs.readFileSync(path.join(ROOT, 'src/config/syncJob.js'), 'utf8');
@@ -744,6 +745,54 @@ test('the step list has no duplicates and no gaps', () => {
         assert.equal(entry.length, 2);
         assert.equal(typeof entry[1], 'string');
         assert.ok(entry[1].length > 0, 'every step needs a human label');
+    }
+});
+
+// ----------------------------------------------- M-34 · the execution batch
+test('a sync batch is always big enough to clear its own overlap window', () => {
+    // The incremental fetch starts at `lastId - ID_OVERLAP`, so the first
+    // ID_OVERLAP rows of every batch are rows the replica already holds. A batch
+    // limit that does not clear them is consumed entirely by re-reading:
+    // MAX(id) does not move, the next cycle asks the identical question, and the
+    // sync stalls FOREVER while reporting a healthy "N rows read" every time.
+    //
+    // Both numbers are environment variables, so that state is one .env edit
+    // away — and it is this project's recurring failure shape: silent, and
+    // indistinguishable from idle.
+    assert.ok(EXEC_BATCH_LIMIT > ID_OVERLAP,
+        'the shipped defaults must leave room to advance the watermark');
+
+    // A limit smaller than the overlap is raised, not obeyed.
+    assert.ok(batchLimitFor(5, 500) > 500);
+    assert.ok(batchLimitFor(100, 500) > 500);
+
+    // A sane limit is left exactly alone — the clamp must not quietly inflate a
+    // deliberate choice, because the whole point of the setting is bounding how
+    // long one transaction holds the write gate.
+    assert.equal(batchLimitFor(20000, 500), 20000);
+    assert.equal(batchLimitFor(3000, 500), 3000);
+
+    // Nonsense never yields zero or a negative, which would fetch nothing at all
+    // and look exactly like "caught up".
+    assert.ok(batchLimitFor(0, 0) >= 1);
+    assert.ok(batchLimitFor(undefined, undefined) >= 1);
+    assert.ok(batchLimitFor(-100, 500) > 500);
+});
+
+test('the execution fetch is bounded on both paths', () => {
+    // Read from the source rather than executed, because running it needs a
+    // Postgres. The assertion is narrow and it is the one that matters: neither
+    // SELECT over execution_entity may be unbounded. The incremental one was,
+    // and it worked — 28,636 rows in one pass after a six-day gap — which is
+    // exactly the number that shows the shape of the risk rather than hiding it.
+    const source = fs.readFileSync(path.join(ROOT, 'src/config/syncJob.js'), 'utf8');
+    const fetches = [...source.matchAll(
+        /SELECT id, "workflowId", status[\s\S]*?FROM execution_entity[\s\S]*?`/g
+    )].map((m) => m[0]);
+
+    assert.equal(fetches.length, 2, 'boot and incremental — if this changes, check the new one too');
+    for (const q of fetches) {
+        assert.match(q, /LIMIT \$\d/, `an unbounded execution fetch: ${q.slice(0, 120)}`);
     }
 });
 
@@ -2169,12 +2218,85 @@ test('every metric the tool offers actually runs', async () => {
     // and then breaks mid-answer.
     const { execute } = require(path.join(ROOT, 'src/ai/execute'));
     const { METRICS } = require(path.join(ROOT, 'src/ai/tools/analytics'));
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
     const ctx = { scope: { unrestricted: true }, visibleIds: null, userId: 'u-stream-test' };
 
-    for (const metric of Object.keys(METRICS)) {
-        const result = await execute('get_analytics', { metric }, ctx);
+    // Looked up rather than hard-coded: a metric declaring `requires` needs a
+    // real id, and an id pinned in a test file is one that stops existing the
+    // day somebody deletes that workflow.
+    const [anyWorkflow] = (await localDb.query('SELECT id FROM workflow_entity LIMIT 1')).rows;
+
+    for (const [metric, spec] of Object.entries(METRICS)) {
+        const args = { metric };
+        if (spec.requires === 'workflow') {
+            assert.ok(anyWorkflow, 'the replica needs at least one workflow for this test');
+            args.workflow = anyWorkflow.id;
+        }
+        const result = await execute('get_analytics', args, ctx);
         assert.ok(result !== undefined && result !== null, `${metric} returned nothing`);
     }
+});
+
+test('a metric about ONE thing refuses to answer about everything', async () => {
+    // `workflow_failure_history` came from DRILLDOWNS, where its id was a
+    // mandatory positional argument. Every other metric here treats a missing
+    // `workflow` as "the whole instance" — so without an explicit declaration
+    // the move would have turned a required input into a silent instance-wide
+    // answer, reported under a heading naming one workflow. That is the same
+    // failure the memory block and the scope filter were both written against,
+    // arriving through a third door.
+    const { execute } = require(path.join(ROOT, 'src/ai/execute'));
+    const { METRICS } = require(path.join(ROOT, 'src/ai/tools/analytics'));
+    const { DRILLDOWNS } = require(path.join(ROOT, 'src/ai/tools/drilldown'));
+    const ctx = { scope: { unrestricted: true }, visibleIds: null, userId: 'u-stream-test' };
+
+    await assert.rejects(
+        () => execute('get_analytics', { metric: 'workflow_failure_history' }, ctx),
+        /needs a `workflow` id/,
+        'a required filter is enforced, not defaulted to instance-wide'
+    );
+
+    // And it really did leave the other registry, so the two lists cannot both
+    // claim it — which is what made the model spend a recovered step every time.
+    assert.ok(!DRILLDOWNS.workflow_failure_history);
+    assert.ok(METRICS.workflow_failure_history);
+
+    // Both wrong addresses redirect to the right one rather than to a list of
+    // twenty alternatives.
+    await assert.rejects(
+        () => execute('drill_down', { kind: 'workflow_failure_history', id: 'x' }, ctx),
+        /Call get_analytics with metric="workflow_failure_history"/
+    );
+    await assert.rejects(
+        () => execute('get_analytics', { metric: 'workflow_errors' }, ctx),
+        /Call get_analytics with metric="workflow_failure_history"/
+    );
+});
+
+test('a grouping id that names nothing is refused, in the assistant too', async () => {
+    // The system prompt already warned about this — "a guessed id does not fail,
+    // it returns an empty result that reads exactly like nothing happened" — and
+    // that warning was the only defence. A model resolving a half-remembered
+    // name would pass an id belonging to nothing and describe the zeroes as a
+    // finding.
+    //
+    // Thrown rather than returned: runner.js hands tool errors back as a step
+    // the model can correct, so the next step is a search_catalog instead of a
+    // fluent paragraph about a workflow that does not exist.
+    const { execute } = require(path.join(ROOT, 'src/ai/execute'));
+    const ctx = { scope: { unrestricted: true }, visibleIds: null, userId: 'u-stream-test' };
+
+    await assert.rejects(
+        () => execute('get_analytics', { metric: 'kpis', workflow: 'NotARealWorkflow' }, ctx),
+        /No workflow with id "NotARealWorkflow"/
+    );
+    await assert.rejects(
+        () => execute('get_analytics', { metric: 'kpis', folder: 'NotARealFolder' }, ctx),
+        /No folder with id/
+    );
+
+    // Unfiltered still works — the check must not cost the common case anything.
+    assert.ok(await execute('get_analytics', { metric: 'kpis' }, ctx));
 });
 
 test('the tool list is built from the same registry the prompt describes', async () => {

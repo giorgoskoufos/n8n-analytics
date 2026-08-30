@@ -200,6 +200,70 @@ function modeClause(mode) {
 }
 
 /**
+ * Refuses a grouping filter whose id names nothing.
+ *
+ * ── The bug this closes ──────────────────────────────────────────────────
+ *
+ * `groupingClause` validates the SHAPE of an id and not its EXISTENCE, so
+ * `{ workflow: 'NotARealWorkflow' }` was accepted, produced
+ * `... IN (SELECT id FROM workflow_entity WHERE id = 'NotARealWorkflow')`, and
+ * selected nothing. The endpoint answered 200 with every figure at zero.
+ *
+ * A zero that means "this did not happen" and a zero that means "you asked
+ * about something that does not exist" are different answers, and nothing on
+ * the page distinguished them. It is the same failure class as the bug that
+ * motivated `filterFor` itself: a filter silently dropping, and the result
+ * looking exactly as authoritative either way. The codebase already states the
+ * rule elsewhere — F-24 §1, "empty ≠ zero" — and this is the last place that
+ * was breaking it.
+ *
+ * ── Existence, not visibility ────────────────────────────────────────────
+ *
+ * This checks that the entity is IN THE REPLICA. It deliberately does not check
+ * that the caller can see anything in it, and it deliberately does not check
+ * that it CONTAINS anything, for two separate reasons:
+ *
+ *   · A real folder with no workflows in it is a legitimate empty result. Making
+ *     that a 400 would be the same mistake in the opposite direction.
+ *   · Answering differently for "does not exist" and "exists but is not yours"
+ *     turns this into a way to enumerate another project's folder and workflow
+ *     ids. Scope already handles the second case correctly, by returning the
+ *     empty set it is supposed to return.
+ *
+ * So: a typo or a hallucinated id is refused; an honest zero still reads as
+ * zero.
+ *
+ * @param {object} grouping  `{ workflow, folder, tag, project }`, any subset
+ * @throws a 400 `daoError` naming the first id that resolves to nothing
+ */
+const GROUPING_TABLES = [
+    ['workflow', 'workflow_entity', 'id'],
+    ['folder', 'folder', 'id'],
+    ['tag', 'tag_entity', 'id'],
+    ['project', 'project', 'id']
+];
+
+async function assertGroupingExists(grouping = {}) {
+    for (const [name, table, column] of GROUPING_TABLES) {
+        const value = grouping[name];
+        if (value === undefined || value === null || value === '') continue;
+
+        const r = await localDb.query(
+            `SELECT 1 AS present FROM ${table} WHERE ${column} = ? LIMIT 1`, [value]
+        );
+        if (!r.rows.length) {
+            // Named, and quoted, because the id is almost always a copy-paste or
+            // a model's guess and the reader needs to see which of four filters
+            // was the wrong one.
+            throw daoError(400,
+                `No ${name} with id "${value}" exists in this dashboard's data. ` +
+                'It may have been deleted, or the id may be wrong — nothing was measured, ' +
+                'rather than measured as zero.');
+        }
+    }
+}
+
+/**
  * A rejection a DAO can raise without knowing what HTTP is.
  *
  * Most validation belongs in the controller, where the request is. Some of it
@@ -224,7 +288,7 @@ const notFound = (message) => daoError(404, message);
 
 module.exports = {
     msBetween, bucketExpr, bucketParams, percentileColumns,
-    filterFor, densify, coverageOf, modeClause,
+    filterFor, assertGroupingExists, densify, coverageOf, modeClause,
     isoDaysAgo, isoHoursAgo, resolveWindow,
     daoError, badRequest, notFound
 };

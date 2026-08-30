@@ -5,6 +5,7 @@ const insightsController = require('../controllers/insightsController');
 const alertsController = require('../controllers/alertsController');
 const { authenticateToken, requireElevatedRole, resolveScope } = require('../middlewares/auth');
 const { syncLimiter, globalApiLimiter } = require('../middlewares/rateLimiter');
+const { verifyGrouping } = require('../middlewares/grouping');
 
 // Every route below reads or writes workflow-derived data, so resolveScope runs
 // on all of them. Applied at the router rather than per route: a handler added
@@ -13,7 +14,13 @@ const { syncLimiter, globalApiLimiter } = require('../middlewares/rateLimiter');
 // globalApiLimiter sits between the two: it keys on req.user, so it needs the
 // token decoded first, and there is no point resolving a scope for a request
 // that is about to be refused.
-router.use(authenticateToken, globalApiLimiter, resolveScope);
+//
+// verifyGrouping is last, and it is here for the same reason resolveScope is: a
+// `?workflow=` naming nothing used to produce a page of zeroes that reads
+// exactly like a measured quiet period. Per-route it would be 27 chances to
+// forget and a 28th handler that never had it. It only touches the database
+// when a request actually carries one of the four filters.
+router.use(authenticateToken, globalApiLimiter, resolveScope, verifyGrouping);
 
 router.get('/analytics/metrics', metricsController.getMetrics);
 router.get('/analytics/executions', metricsController.getExecutions);

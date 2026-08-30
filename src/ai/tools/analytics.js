@@ -101,8 +101,31 @@ const METRICS = {
         window: 'none',
         describe: 'Failure count and total runs per workflow — counts ACROSS workflows, so a ' +
             'rate can be given with its denominator. For the failure history of ONE workflow, ' +
-            'broken down by node and category, use drill_down with ' +
-            'kind="workflow_failure_history".'
+            'broken down by node and category, use the `workflow_failure_history` metric with ' +
+            'a `workflow` filter.'
+    },
+
+    /**
+     * Moved here from DRILLDOWNS — see the header of drilldown.js.
+     *
+     * `requires` is the part that is not cosmetic. As a drill-down its input was
+     * a mandatory positional `id`; as a metric it is `workflow`, which every
+     * other entry here treats as OPTIONAL and instance-wide when absent. Without
+     * the declaration, calling it with no workflow would quietly report the whole
+     * instance's failure history under a heading naming one workflow — which is
+     * the exact failure the memory block and the scope filter were both written
+     * against, arriving through a third door.
+     */
+    workflow_failure_history: {
+        run: (o) => errorIntelligenceDao.getWorkflowErrorDrilldown({
+            scope: o.scope, grouping: {}, route: { id: o.grouping.workflow }, userId: o.userId
+        }),
+        window: 'none',
+        requires: 'workflow',
+        describe: 'The failure history of ONE workflow, grouped by node and category, with the ' +
+            'path that led to each error. Requires a `workflow` id from search_catalog. Not to ' +
+            'be confused with `errors_by_workflow`, which counts failures ACROSS workflows and ' +
+            'takes no id.'
     },
     reliability: {
         run: (o) => insightsDao.getReliability(o),

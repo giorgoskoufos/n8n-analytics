@@ -31,6 +31,8 @@ const DB = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'n8ndb-test-')), 'tes
 
 // 40 executions plus the one retry of the first of them.
 const SEEDED = 41;
+/** A folder that exists and holds no workflows. See the note in `seed()`. */
+const EMPTY_FOLDER = 'fld-empty';
 const SEEDED_SUCCESS = 33;   // 40 - 8 failures + the successful retry
 
 const OWNER = jwt.sign({ id: 'u-owner', email: 'o@x', role: 'global:owner', jti: '1' }, SECRET, { expiresIn: '1h' });
@@ -135,6 +137,23 @@ function seed() {
                 "jsonSizeBytes" INTEGER, "binaryDataSizeBytes" INTEGER)`);
             db.run("INSERT INTO workflow_entity VALUES ('wf-a','Alpha',1,0),('wf-b','Beta',1,0)," +
                 "('wf-z','Zeta Retired',0,1)");
+
+            // A real folder with nothing in it.
+            //
+            // Seeded here rather than written after boot, because the running
+            // server owns the write gate (B-36) and a second writer on one SQLite
+            // file is the thing that gate exists to prevent. `IF NOT EXISTS`
+            // matches the migration that would otherwise create it, so the
+            // migration finds it already there and moves on.
+            //
+            // It exists to hold one distinction apart: an id that names NOTHING
+            // is refused, and an id that names something EMPTY still answers
+            // zero. Without the second half, the fix for the first is free to
+            // overshoot and nobody notices.
+            db.run(`CREATE TABLE IF NOT EXISTS folder (
+                id TEXT PRIMARY KEY, name TEXT, parent_folder_id TEXT,
+                project_id TEXT, created_at DATETIME, updated_at DATETIME)`);
+            db.run("INSERT INTO folder (id, name) VALUES ('fld-empty','Nothing In Here')");
 
             // Error detail for the seeded failures (F-07). The messages differ
             // only in a row number, which is exactly the case the old
@@ -742,11 +761,25 @@ test('a folder or tag filter narrows every endpoint that takes one', async () =>
         assert.equal(bad.status, 400, `${route} should refuse a malformed folder id`);
     }
 
-    // An id that is well-formed but matches nothing returns an empty answer
-    // rather than an error — that is a real, if uninteresting, result.
-    const empty = await api('/api/analytics/metrics?folder=nosuchfolder', { token: OWNER });
-    assert.equal(empty.status, 200);
-    assert.equal(empty.body.summary.total, 0);
+    // An id that is well-formed but names nothing is refused, and this assertion
+    // used to say the opposite — "returns an empty answer rather than an error,
+    // that is a real if uninteresting result". It is not. A zero that means
+    // "nothing happened in this folder" and a zero that means "you asked about a
+    // folder that does not exist" are different answers, and the page rendered
+    // them identically: every figure at zero, 200 OK, nothing to distinguish
+    // them. Same failure class as the bug that motivated `filterFor`, and the
+    // same rule F-24 §1 already states for charts — empty ≠ zero.
+    const missing = await api('/api/analytics/metrics?folder=nosuchfolder', { token: OWNER });
+    assert.equal(missing.status, 400, 'an id naming nothing is refused, not answered with zeroes');
+    assert.match(missing.body.error, /no folder with id/i);
+    assert.match(missing.body.error, /nosuchfolder/, 'and it names the offending filter');
+
+    // A folder that EXISTS and is simply empty still answers zero, which is the
+    // half of this that must not change. Making a real empty set into a 400
+    // would be the same mistake pointed the other way.
+    const realButEmpty = await api(`/api/analytics/metrics?folder=${EMPTY_FOLDER}`, { token: OWNER });
+    assert.equal(realButEmpty.status, 200, 'a real folder with nothing in it is a real zero');
+    assert.equal(realButEmpty.body.summary.total, 0);
 
     // And with no filter, everything is still there.
     const all = await api('/api/analytics/metrics', { token: OWNER });

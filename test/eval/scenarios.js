@@ -276,11 +276,18 @@ function build(truth) {
                     // The scenario originally demanded the first, which is what
                     // the model did before the drill-down was renamed — so the
                     // rename "broke" a turn by making it pick the better tool.
+                    //
+                    // `workflow_failure_history` is a get_analytics METRIC now,
+                    // not a drill_down kind. This turn was red on purpose while
+                    // it sat in the wrong registry: the model kept reaching for
+                    // get_analytics, which was the correct instinct about a tool
+                    // whose input is a workflow id, and spent a recovered step
+                    // being told otherwise. The expectation follows the tool.
                     message: 'είναι μεμονωμένο ή συμβαίνει συχνά;',
                     tools: {
                         oneOf: [
                             { tool: 'get_analytics', args: { metric: 'errors_by_workflow' } },
-                            { tool: 'drill_down', args: { kind: 'workflow_failure_history' } },
+                            { tool: 'get_analytics', args: { metric: 'workflow_failure_history' } },
                             { tool: 'get_analytics', args: { metric: 'error_intelligence' } }
                         ]
                     }

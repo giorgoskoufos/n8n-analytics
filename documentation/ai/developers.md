@@ -38,8 +38,8 @@ POST /api/ai-chat/stream
 | `ai/runner.js` | The tool-calling loop and its bounds |
 | `ai/execute.js` | Tool name → the work. The only place that maps arguments onto DAO calls |
 | `ai/tools/index.js` | The tool registry and the shared argument envelope |
-| `ai/tools/analytics.js` | The 20 named analyses. One entry = one metric |
-| `ai/tools/drilldown.js` | The four "look at this one thing" tools |
+| `ai/tools/analytics.js` | The named analyses. One entry = one metric |
+| `ai/tools/drilldown.js` | The three "look at this one thing" tools |
 | `ai/tools/docs.js` | The n8n documentation MCP client |
 | `ai/catalog/index.js` | FTS5 index over names, rebuilt per scope, TTL-cached |
 | `ai/tags.js` | `@` parsing, and re-resolution through the scoped catalogue |
@@ -123,10 +123,20 @@ filter can only narrow further and never widen. **Call `filterFor`, never
 called `scopeClause`, silently dropping the filter, and the answers looked
 correct.
 
-> **Known sharp edge.** `groupingClause` validates the *shape* of an id, not its
-> *existence*. `{ workflow: 'NotARealWorkflow' }` is accepted and produces an
-> empty set indistinguishable from a real zero. This is the same failure class as
-> the bug that motivated the whole filter, and it is still open.
+**An id that names nothing is refused.** `groupingClause` validates the *shape*
+of an id and cannot check its existence — it is a pure SQL-fragment builder,
+called from inside the synchronous `filterFor`. So the check lives at the edges
+instead, in `assertGroupingExists` (`dao/shared.js`), reached two ways: the
+`verifyGrouping` middleware for HTTP, and `execute.js` before any `get_analytics`
+dispatch. `{ workflow: 'NotARealWorkflow' }` used to produce an empty set
+indistinguishable from a real zero — the same failure class as the bug that
+motivated the whole filter.
+
+> It checks **existence**, not visibility and not contents. A folder that exists
+> and is empty still answers zero, because making that an error is the same
+> mistake pointed the other way; and answering differently for "does not exist"
+> and "exists but is not yours" would turn the check into a way to enumerate
+> another project's ids.
 
 ---
 
@@ -299,10 +309,19 @@ there rather than in `analytics.js` is stated at the top of the file: *the input
 is not a workflow id*. A trace wants an execution id; a group wants a
 fingerprint.
 
-> **Known sharp edge.** `workflow_failure_history` no longer satisfies that rule —
-> its input *is* a workflow id, and `get_analytics` grew a `workflow` filter after
-> it was written. The model reaches for `get_analytics(metric: …)` and spends a
-> recovered step every time. It belongs in `METRICS`; the note is in the file.
+`workflow_failure_history` used to break that rule and has moved to `METRICS`,
+where the model kept trying to put it — a recovered step on every turn that
+asked whether a failure was isolated or recurring. Both old addresses redirect
+rather than 404, and `whereIs()` in `execute.js` works the destination out from
+the registries so a redirect cannot be left pointing at the previous home.
+
+### A metric that requires a filter
+
+`requires: 'workflow'` on a `METRICS` entry makes that filter mandatory. Only
+`workflow_failure_history` uses it, and it needs it because it arrived from
+`DRILLDOWNS` where the id was a positional argument: every other metric reads a
+missing `workflow` as *the whole instance*, so without the declaration a required
+input becomes a silent instance-wide answer under a heading naming one workflow.
 
 ### A new tool
 
@@ -379,7 +398,7 @@ would attribute every question to one individual.
 
 ## Testing
 
-**`npm run check`** — lint plus 184 unit and integration tests, free and offline.
+**`npm run check`** — lint plus 190 unit and integration tests, free and offline.
 The AI paths are covered by stubbing `src/config/openai` through `require.cache`
 and re-requiring the controller: SSE framing, event ordering and abort behaviour
 are all tested without a network call or a key.

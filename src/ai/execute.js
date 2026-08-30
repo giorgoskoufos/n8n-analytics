@@ -29,7 +29,7 @@ const conversations = require('../dao/conversationsDao');
 const readonlyDb = require('../config/readonlyDb');
 const { guard } = require('../utils/sqlGuard');
 const { VIEWS, ALLOWED_VIEWS } = require('../config/aiViews');
-const { resolveWindow } = require('../dao/shared');
+const { resolveWindow, assertGroupingExists } = require('../dao/shared');
 const insightsDao = require('../dao/insightsDao');
 const log = require('../utils/logger').logger('AI-TOOL');
 
@@ -131,7 +131,8 @@ async function describeViews({ view, visibleIds }) {
  * `startDate` means, which is exactly the sort of thing that is invisible until
  * a chart is wrong.
  */
-function argsFor(metric, spec, args, scope) {
+function argsFor(metric, spec, args, ctx) {
+    const { scope, userId } = ctx;
     const grouping = {
         workflow: args.workflow || undefined,
         folder: args.folder || undefined,
@@ -169,7 +170,36 @@ function argsFor(metric, spec, args, scope) {
         };
     }
 
-    return { scope, grouping };
+    // `userId` rides along on the windowless shape because one metric there —
+    // `workflow_failure_history`, moved from DRILLDOWNS — reaches a DAO that
+    // logs a refusal against the person who was refused. Every other DAO ignores
+    // the extra key, which is cheaper than a second envelope shape for one
+    // caller.
+    return { scope, grouping, userId };
+}
+
+/**
+ * Where a name that used to exist lives now.
+ *
+ * Resolved against the registries rather than written into `RENAMED` as a fixed
+ * sentence, because `workflow_failure_history` has already crossed from one tool
+ * to the other once. A hard-coded "call drill_down with…" was correct until that
+ * move and silently wrong the moment after it — pointing a recovering caller at
+ * the tool that will now reject it, which costs the step the redirect exists to
+ * save.
+ */
+function whereIs(name) {
+    if (METRICS[name]) {
+        const needs = METRICS[name].requires;
+        return `Call get_analytics with metric="${name}"` +
+            (needs ? `, passing the \`${needs}\` id.` : '.');
+    }
+    if (DRILLDOWNS[name]) {
+        return `Call drill_down with kind="${name}" and the id it needs.`;
+    }
+    // Unreachable while RENAMED only points at things that exist, which is what
+    // the unit test asserts. Said plainly rather than left as `undefined`.
+    return `It is called "${name}" now.`;
 }
 
 /**
@@ -195,17 +225,11 @@ async function execute(name, args, ctx) {
     case 'get_analytics': {
         const spec = METRICS[args.metric];
         if (!spec) {
-            // The near miss first. Saying WHERE a name lives turns a retry
-            // into a redirect, and the full list below stays for the case where
-            // the name is simply wrong rather than in the wrong place.
+            // The near miss first. Saying WHERE a name lives turns a retry into a
+            // redirect, and the full list below stays for the case where the name
+            // is simply wrong rather than in the wrong place.
             const moved = RENAMED[args.metric];
-            if (moved) {
-                throw new Error(
-                    `"${args.metric}" no longer exists. For ONE workflow's failure history, ` +
-                    `call drill_down with kind="${moved}" and that workflow's id. For failures ` +
-                    'counted ACROSS workflows, the metric is "errors_by_workflow".'
-                );
-            }
+            if (moved) throw new Error(`"${args.metric}" no longer exists. ${whereIs(moved)}`);
             if (DRILLDOWNS[args.metric]) {
                 throw new Error(
                     `"${args.metric}" is a drill_down kind, not a get_analytics metric. ` +
@@ -216,7 +240,35 @@ async function execute(name, args, ctx) {
                 `Unknown metric "${args.metric}". Available: ${Object.keys(METRICS).join(', ')}.`
             );
         }
-        return spec.run(argsFor(args.metric, spec, args, scope));
+
+        // A metric that names a required filter gets it enforced here rather
+        // than in its DAO. `workflow_failure_history` is the only one today, and
+        // it needs this because it arrived from DRILLDOWNS where the id was a
+        // mandatory argument: every OTHER metric treats a missing `workflow` as
+        // "the whole instance", so without this it would answer instance-wide
+        // under a heading naming one workflow.
+        if (spec.requires && !args[spec.requires]) {
+            throw new Error(
+                `The "${args.metric}" metric is about ONE ${spec.requires}, so it needs a ` +
+                `\`${spec.requires}\` id — call search_catalog first if you do not have one. ` +
+                'It has no instance-wide form; for that, use "errors_by_workflow".'
+            );
+        }
+        // Before the DAO, not inside it.
+        //
+        // This is the tool the system prompt already warns about — "a guessed id
+        // does not fail, it returns an empty result that reads exactly like
+        // nothing happened" — and until now that warning was the only defence.
+        // The model would resolve a name it half-remembered, pass an id that
+        // belonged to nothing, and describe the resulting zeroes as a finding.
+        //
+        // A throw here is not fatal: runner.js hands tool errors back to the
+        // model as a step it can correct, so the next step is a `search_catalog`
+        // instead of a fluent paragraph about a workflow that does not exist.
+        await assertGroupingExists({
+            workflow: args.workflow, folder: args.folder, tag: args.tag, project: args.project
+        });
+        return spec.run(argsFor(args.metric, spec, args, ctx));
     }
 
     case 'drill_down': {
@@ -224,9 +276,7 @@ async function execute(name, args, ctx) {
         if (!spec) {
             // The same near-miss checks in the other direction.
             const moved = RENAMED[args.kind];
-            if (moved) {
-                throw new Error(`"${args.kind}" was renamed to "${moved}". Use that kind.`);
-            }
+            if (moved) throw new Error(`"${args.kind}" no longer exists. ${whereIs(moved)}`);
             if (METRICS[args.kind]) {
                 throw new Error(
                     `"${args.kind}" is a get_analytics metric, not a drill_down kind. ` +

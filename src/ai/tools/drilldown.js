@@ -1,5 +1,5 @@
 /**
- * The four "look at this one thing" tools.
+ * The three "look at this one thing" tools.
  *
  * Separate from get_analytics because their inputs genuinely differ: a trace
  * wants an execution id, a group wants a fingerprint. Folding them into the
@@ -10,24 +10,21 @@
  * Each takes the caller's scope, so a drill-down cannot reach an execution the
  * user is not allowed to see. That check lives in the DAO, not here.
  *
- * ── One of these is now on the wrong side of that line ───────────────────
+ * ── The rule, and the entry that broke it ────────────────────────────────
  *
- * The rule above is "separate when the input is not a workflow id". Adding a
- * `workflow` filter to get_analytics moved the line, and
- * `workflow_failure_history` ended up behind it: its input IS a workflow id, and
- * the analytics envelope now carries exactly that.
+ * **A tool belongs here when its input is not a workflow id.** That is the whole
+ * test, and `workflow_failure_history` used to fail it: its input IS a workflow
+ * id, and once get_analytics grew a `workflow` filter the analytics envelope
+ * carried exactly that.
  *
- * It shows. Asked whether a failure is isolated or recurring, the model reaches
- * for `get_analytics(metric: 'workflow_failure_history')` — not confusion, but
- * the rule above applied correctly to a tool that no longer follows it. It costs
- * one recovered step every time, and renaming the entry (from `workflow_errors`,
- * which collided with the `errors_by_workflow` metric) fixed the name collision
- * without touching this.
+ * It showed. Asked whether a failure was isolated or recurring, the model
+ * reached for `get_analytics(metric: 'workflow_failure_history')` — not
+ * confusion, but the rule above applied correctly to a tool that no longer
+ * followed it, costing one recovered step every single time.
  *
- * The fix is to move it into METRICS, where the caller keeps trying to put it,
- * with `grouping.workflow` as its required input. Deliberately not done in the
- * same change as the rename: one is a rename, the other moves a tool between two
- * registries and changes what a missing argument means.
+ * It has moved to `METRICS` in analytics.js, where the caller kept trying to put
+ * it, taking `workflow` like every other filter there. `RENAMED` below is what
+ * catches a caller that still has the old address.
  */
 
 const metricsDao = require('../../dao/metricsDao');
@@ -36,15 +33,20 @@ const errorIntelligenceDao = require('../../dao/errorIntelligenceDao');
 /**
  * Names that used to exist here, and where they went.
  *
- * `workflow_errors` was this drill-down, and `errors_by_workflow` is a metric:
- * two names built from the same three words, one on each tool. A model asked for
- * one workflow's failures reached for the wrong one and spent a step finding
- * out — measured, on 1 turn in 33, every run.
+ * Two moves are recorded, and they are different kinds of move.
  *
- * The rename fixes it for anyone reading the two lists side by side. This map
- * fixes it for a caller that already has the old name in its head, because
- * without it the old name matches nothing and the helpful redirect degrades into
- * "unknown, here are twenty alternatives".
+ * `workflow_errors` was a RENAME. It collided with the `errors_by_workflow`
+ * metric — two names built from the same three words, one on each tool — and a
+ * model asked for one workflow's failures reached for the wrong one and spent a
+ * step finding out, measured on 1 turn in 33, every run.
+ *
+ * `workflow_failure_history` was a MOVE, to the other registry entirely. Both
+ * end at the same place, so both live in one map, and execute.js works out which
+ * tool the destination is on rather than this file asserting it — the entry
+ * would otherwise have to be corrected a second time if it ever moved back.
+ *
+ * The map exists because without it an old name matches nothing and the helpful
+ * redirect degrades into "unknown, here are twenty alternatives".
  */
 const RENAMED = {
     workflow_errors: 'workflow_failure_history'
@@ -62,16 +64,6 @@ const DRILLDOWNS = {
             'fingerprint. The error text and payload are not available. `id` is an execution id.',
         run: ({ id, scope, userId }) =>
             metricsDao.getExecutionError({ scope, grouping: {}, filters: {}, route: { id }, userId })
-    },
-    workflow_failure_history: {
-        describe: 'The failure history of ONE workflow, grouped by node and category. ' +
-            '`id` is a workflow id from search_catalog. Not to be confused with the ' +
-            '`errors_by_workflow` metric, which counts failures ACROSS workflows and takes ' +
-            'no id.',
-        run: ({ id, scope, userId }) =>
-            errorIntelligenceDao.getWorkflowErrorDrilldown({
-                scope, grouping: {}, route: { id }, userId
-            })
     },
     error_group: {
         describe: 'The executions behind one error fingerprint — when it happens, which ' +

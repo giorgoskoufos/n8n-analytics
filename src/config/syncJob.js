@@ -41,6 +41,66 @@ const MISSING_GRACE_MS = Number(process.env.EXECUTION_MISSING_GRACE_MS) || 60 * 
 // the rows come back through ON CONFLICT DO UPDATE, which is already idempotent.
 const ID_OVERLAP = Number(process.env.SYNC_ID_OVERLAP) || 500;
 
+// M-34. The most executions one cycle will pull from Postgres.
+//
+// ── The hazard, which was scale and not design ───────────────────────────
+//
+// The incremental fetch was `WHERE id > $1 ORDER BY id ASC` with no LIMIT. The
+// boot path is bounded by a 14-day window; this one was bounded only by how far
+// behind the replica happened to be. It worked — 28,636 rows in a single pass
+// after a six-day gap — and that is exactly the number that shows the shape of
+// the problem: a month down is ~140k rows, a quarter is ~420k, all of it
+// materialised in Node's memory and written in ONE transaction that holds the
+// write gate (B-36) for its whole duration. No resumability either: a process
+// that dies halfway has done nothing.
+//
+// ── Why a plain LIMIT is the whole fix ───────────────────────────────────
+//
+// There is no cursor to keep, because there already is one. The watermark is
+// `MAX(id)` read from the replica at the top of every cycle, so a batch that
+// stops early simply leaves the watermark lower and the next cycle picks up
+// from there. That is also the answer to the ID_OVERLAP question this raised:
+// the overlap is measured from the max id actually WRITTEN, not from the id the
+// fetch started at, and since the watermark is re-read from the replica rather
+// than carried in a variable, a truncated batch cannot move it past rows that
+// were never stored.
+//
+// 20,000 is roughly a day of production traffic on the instance this was built
+// against — large enough that an ordinary cycle is never split, small enough
+// that the worst case is bounded at a few tens of megabytes and a transaction
+// measured in seconds.
+//
+// ── The limit must clear the overlap, and this is not a style rule ───────
+//
+// The fetch starts at `lastId - ID_OVERLAP`, so the first ID_OVERLAP rows of
+// every batch are rows the replica already has. If the batch limit is not
+// comfortably larger than the overlap, a whole batch can be consumed re-reading
+// them: `MAX(id)` does not move, the next cycle asks the identical question, and
+// the sync stalls forever while reporting a healthy "N rows read" every time.
+//
+// Both numbers are environment variables, so that misconfiguration is one
+// `.env` edit away — and it is the exact failure this project keeps meeting:
+// silent, and indistinguishable from idle. Clamped rather than refused, because
+// a running sync with a corrected limit is better than a process that will not
+// boot; said out loud, because a value that was quietly ignored is one nobody
+// knows to fix.
+const MIN_BATCH_HEADROOM = 4;
+
+/** The effective batch size for a configured limit and overlap. Pure, so it is testable. */
+function batchLimitFor(configured, overlap) {
+    return Math.max(Number(configured) || 0, (Number(overlap) || 0) * MIN_BATCH_HEADROOM, 1);
+}
+
+const CONFIGURED_BATCH_LIMIT = Number(process.env.SYNC_EXEC_BATCH_LIMIT) || 20000;
+const EXEC_BATCH_LIMIT = batchLimitFor(CONFIGURED_BATCH_LIMIT, ID_OVERLAP);
+if (EXEC_BATCH_LIMIT !== CONFIGURED_BATCH_LIMIT) {
+    log.warn(
+        `SYNC_EXEC_BATCH_LIMIT=${CONFIGURED_BATCH_LIMIT} is too small against ` +
+        `SYNC_ID_OVERLAP=${ID_OVERLAP}: a batch that cannot get past the overlap window ` +
+        `never advances the watermark. Using ${EXEC_BATCH_LIMIT} instead.`
+    );
+}
+
 // --- Error analytics queue limits (M-14 / M-15) ---
 
 // Ids per payload query. The old code joined execution_data — 1.2 GB — for every
@@ -372,7 +432,14 @@ async function runSyncPass() {
                 WHERE "startedAt" > NOW() - INTERVAL '14 days'
                   ${notDeleted}
                 ORDER BY id ASC
+                LIMIT $1
             `;
+            // Bounded too, though this path already has a 14-day window: on a
+            // busy instance fourteen days is itself six figures. Oldest ids
+            // first, so a truncated boot leaves a watermark that the incremental
+            // path below then carries forward — the two paths hand over rather
+            // than each needing their own resumption logic.
+            params = [EXEC_BATCH_LIMIT];
         } else {
             // Incremental, with an overlap window so a late-committing row with a
             // lower id is not skipped for good. See ID_OVERLAP.
@@ -384,8 +451,9 @@ async function runSyncPass() {
                 WHERE id > $1
                   ${notDeleted}
                 ORDER BY id ASC
+                LIMIT $2
             `;
-            params = [from];
+            params = [from, EXEC_BATCH_LIMIT];
         }
 
         const newExecs = await pool.query(execQuery, params);
@@ -449,7 +517,37 @@ async function runSyncPass() {
         }
         // Reports what actually changed, not how many rows the overlap happened to
         // re-read — otherwise every idle cycle would claim it synced 500 executions.
-        step('executions', `${syncedCount} new or changed (${newExecs.rows.length} rows read)`);
+        //
+        // ── And whether it finished ──────────────────────────────────────
+        //
+        // A batch that came back full is a batch that was probably cut, and a
+        // cycle reporting "20,000 new" while another 120,000 wait looks exactly
+        // like a cycle that caught up. That is the failure mode this project
+        // keeps meeting: not wrong, just silent about being incomplete.
+        //
+        // The remaining count costs one indexed COUNT on Postgres and is only
+        // asked for when the batch saturated — which is precisely when somebody
+        // needs the number, and never during ordinary operation.
+        let remaining = 0;
+        if (newExecs.rows.length >= EXEC_BATCH_LIMIT) {
+            const highest = newExecs.rows[newExecs.rows.length - 1].id;
+            const rest = await pool.query(
+                `SELECT COUNT(*) AS n FROM execution_entity WHERE id > $1 ${notDeleted}`,
+                [highest]
+            );
+            remaining = Number(rest.rows[0].n) || 0;
+        }
+        step('executions', remaining > 0
+            ? `${syncedCount} new or changed · batch full at ${EXEC_BATCH_LIMIT}, ` +
+              `${remaining.toLocaleString()} still behind — resuming next cycle`
+            : `${syncedCount} new or changed (${newExecs.rows.length} rows read)`);
+        if (remaining > 0) {
+            log.warn(
+                `Execution sync is behind: ${remaining.toLocaleString()} rows remain after this ` +
+                `batch of ${EXEC_BATCH_LIMIT}. Cycles will continue to close the gap; raise ` +
+                'SYNC_EXEC_BATCH_LIMIT to catch up faster at the cost of a longer write lock.'
+            );
+        }
 
         // 3. Update Concurrency Stats (UTC Standardized)
         await updateExecutionVolumeStats();
@@ -2129,6 +2227,11 @@ module.exports = {
     // and the log quietly says "[9/13]" for two different things.
     PASS_STEPS,
     step,
+    // M-34. Exported because the stall it prevents is invisible: the sync keeps
+    // running and keeps reporting rows read, and never advances.
+    batchLimitFor,
+    EXEC_BATCH_LIMIT,
+    ID_OVERLAP,
     syncData,
     syncAuthorization,
     updateExecutionVolumeStats,
