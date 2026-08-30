@@ -24,6 +24,7 @@ tasks.md
 TODO-FIXES.md
 TODO-FEATURES.md
 handoff-ai/
+tmp/
 
 # --- Generated / dumped artifacts ---
 custom_logs.dropped.json
