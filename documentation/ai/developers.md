@@ -398,7 +398,7 @@ would attribute every question to one individual.
 
 ## Testing
 
-**`npm run check`** — lint plus 190 unit and integration tests, free and offline.
+**`npm run check`** — lint plus 192 unit and integration tests, free and offline.
 The AI paths are covered by stubbing `src/config/openai` through `require.cache`
 and re-requiring the controller: SSE framing, event ordering and abort behaviour
 are all tested without a network call or a key.

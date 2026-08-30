@@ -262,6 +262,21 @@ Two are left out on purpose. `deletedAt` would always be NULL here, because the 
 
 **Catching up** — a replica that predates those columns fills them in from Postgres over the next few sync cycles, oldest first, time-boxed so no single cycle stalls. Executions n8n has already pruned keep NULLs, which is the truthful answer rather than a guess. On the 500,000-row replica this was built against, 98,000 rows still existed upstream and the whole pass took about 35 seconds; the remaining 405,000 are history only this database still has.
 
+**The first sync, and why it is not one pass** — five stages are bounded on
+purpose: executions by a row limit, the error queue by its chunk size, and three
+backfills by a time budget each, so that no single cycle holds the write gate for
+minutes. A new instance is therefore *partly* populated after its first cycle,
+which used to be invisible — the pages showed plausible, incomplete numbers, and
+the only remedy anybody could find was pressing "Sync now" repeatedly.
+
+Two things fix that. A cycle that ends with work outstanding schedules the next
+one **in seconds** rather than waiting out the interval, so the replica fills in
+minutes without anybody touching it. And the backlog is a number the interface
+shows: a **first-run sheet** with a percentage while the pages are still empty,
+and after that a `Catching up · 43%` line in the sidebar — which outranks
+"Synced 12s ago", because mid-catch-up the pipeline is running perfectly on
+schedule while every total on every page is a floor.
+
 **Two archives, not one** — the replica deliberately outlives n8n's pruning, so "what this database knows" and "what n8n is still holding" are different sets, and they drift further apart every day. That matters to exactly one thing: the storage forecast, whose whole subject is the size of the *source*. Each ETL cycle therefore records the oldest execution id Postgres still has (`source_oldest_execution_id`, one indexed `MIN(id)`), and the forecast is bounded by it. Without that bound the panel would keep counting payload sizes for executions n8n deleted weeks ago, and report a store growing without limit — the exact false alarm it exists to prevent.
 
 ---
@@ -531,7 +546,11 @@ These no longer prevent corruption — the lock does. They only shorten the wind
 
 ### Logs
 
-Levelled and structured. `LOG_LEVEL` is `error | warn | info | debug` (default `info`), and the format defaults to human-readable on a terminal and JSON everywhere else, so a developer and a log shipper each get what they need without configuring anything.
+Levelled, structured, and split into two sinks. `LOG_LEVEL` is `error | warn | info | debug` (default `info`) and applies to both.
+
+**Console** (`docker logs`) is a narrative, not a firehose: `SYNC`, `SERVER` and `LOCK` at every level — the sync running, the process starting and stopping, which instance currently owns the ETL lock — plus any `warn`/`error` from anywhere, so a problem never requires already tailing a file to notice. Tune the allowlist with `LOG_CONSOLE_COMPONENTS`.
+
+**File** is the complete record: every component, one JSON object per line, at `LOG_FILE` (default a `logs/` folder beside the SQLite replica, so it rides the same volume — nothing new to mount). Meant to be picked up later by something else — Promtail, a Loki sidecar, `docker cp` for a support bundle — without needing to reconfigure this app first. Rotates at `LOG_FILE_MAX_BYTES` (default 10 MB) keeping `LOG_FILE_BACKUPS` (default 2), because this file shares a volume with data that cannot be re-synced from n8n and must never be the reason it fills up. `LOG_FILE=off` disables it.
 
 Each ETL pass reports its stages as `[n/13]`, so a sync in progress is
 distinguishable from one that finished quietly. The position is fixed per stage

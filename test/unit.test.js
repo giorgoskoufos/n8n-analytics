@@ -117,12 +117,18 @@ test('validateRoiEntry bounds the numbers', () => {
 test('the logger never prints a secret', () => {
     // Both of these had already leaked through another channel and had to be
     // rotated; the log must not be a third way out.
+    //
+    // Logged as SYNC rather than an arbitrary component: the console now only
+    // narrates a short allowlist of components (see "console is a narrower
+    // view" below), and this test wants to see the line arrive on stdout the
+    // way an operator watching `docker logs` would, not merely confirm the
+    // file sink got it.
     const { logger } = require(path.join(ROOT, 'src/utils/logger'));
     const captured = [];
     const realWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
     try {
-        logger('TEST').info('boot', {
+        logger('SYNC').info('boot', {
             password: 'hunter2',
             token: 'eyJhbGciOi',
             nested: { apiKey: 'sk-live-secret', keep: 'visible' }
@@ -140,16 +146,163 @@ test('the logger never prints a secret', () => {
 test('the logger keeps an Error usable', () => {
     // An Error has no enumerable properties, so a logger that treated trailing
     // arguments as a fields object would drop the message entirely.
+    //
+    // Component is arbitrary here on purpose (not in the console allowlist):
+    // `error` bypasses it regardless of where it came from, which is the other
+    // half of this test.
     const { logger } = require(path.join(ROOT, 'src/utils/logger'));
     const captured = [];
     const realWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = (chunk) => { captured.push(String(chunk)); return true; };
     try {
-        logger('TEST').error('Sync failed:', new Error('connection refused'));
+        logger('AUTH').error('Sync failed:', new Error('connection refused'));
     } finally {
         process.stderr.write = realWrite;
     }
     assert.match(captured.join(''), /connection refused/);
+});
+
+// -------------------------------------------------- logger: console vs file
+//
+// The logger writes to two places now: a file sink meant to be mounted by
+// something else later (Loki, a support bundle), and a console sink meant to
+// stay readable while an operator watches `docker logs -f` for the one thing
+// that used to be invisible — is the sync still running. They need to
+// disagree on purpose (the file gets everything, the console gets a curated
+// slice) and both need testing, which means a fresh module instance per
+// scenario: logger.js reads its configuration from `process.env` once, at
+// `require()` time, the same way `src/config/openai.js` does — so the only way
+// to test two different configurations in one process is to bust the require
+// cache between them, exactly like `withStubbedModel` does for the AI tests
+// further down this file.
+
+const loggerPath = require.resolve(path.join(ROOT, 'src/utils/logger'));
+
+/**
+ * Requires a fresh logger.js under a set of environment overrides, runs `fn`
+ * against it, then restores the environment and evicts the module again — so
+ * a plain `require('.../logger')` anywhere else in this file, before or after,
+ * keeps seeing the default configuration rather than whatever a single test
+ * happened to set last.
+ */
+async function withLogger(env, fn) {
+    const prior = {};
+    for (const key of Object.keys(env)) prior[key] = process.env[key];
+    Object.assign(process.env, env);
+    delete require.cache[loggerPath];
+    try {
+        await fn(require(loggerPath));
+    } finally {
+        for (const key of Object.keys(env)) {
+            if (prior[key] === undefined) delete process.env[key];
+            else process.env[key] = prior[key];
+        }
+        delete require.cache[loggerPath];
+    }
+}
+
+/** A temp dir per test, so parallel test files (and re-runs) never collide. */
+function tempLogDir(name) {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), `n8n-log-${name}-`));
+    return { dir, file: path.join(dir, 'app.jsonl') };
+}
+
+test('a component off the console allowlist still reaches the file, in full', async () => {
+    const { dir, file } = tempLogDir('file-sink');
+    try {
+        await withLogger({
+            LOG_FILE: file, LOG_CONSOLE_COMPONENTS: 'SYNC', LOG_LEVEL: 'info', LOG_FORMAT: 'json'
+        }, async ({ logger, flush }) => {
+            const captured = [];
+            const realWrite = process.stdout.write.bind(process.stdout);
+            process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
+            try {
+                // HTTP is not in the allowlist passed above.
+                logger('HTTP').info('GET /api/settings 200', { id: 'abc123', ms: 12 });
+            } finally {
+                process.stdout.write = realWrite;
+            }
+            await flush();
+
+            assert.equal(captured.join(''), '', 'an unlisted component at info stays off the console');
+
+            const written = fs.readFileSync(file, 'utf8').trim().split('\n');
+            assert.equal(written.length, 1, 'but it is still written, once, to the file');
+            const entry = JSON.parse(written[0]);
+            assert.equal(entry.component, 'HTTP');
+            assert.equal(entry.id, 'abc123');
+        });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('warn and error reach the console from any component, allowlisted or not', async () => {
+    const { dir, file } = tempLogDir('warn-bypass');
+    try {
+        await withLogger({
+            LOG_FILE: file, LOG_CONSOLE_COMPONENTS: 'SYNC', LOG_FORMAT: 'json'
+        }, async ({ logger, flush }) => {
+            const captured = [];
+            const realWrite = process.stderr.write.bind(process.stderr);
+            process.stderr.write = (chunk) => { captured.push(String(chunk)); return true; };
+            try {
+                logger('RATELIMIT').warn('Too many login attempts', { ip: '203.0.113.7' });
+            } finally {
+                process.stderr.write = realWrite;
+            }
+            await flush();
+            assert.match(captured.join(''), /Too many login attempts/,
+                'a warning is not silenced just because RATELIMIT is not on the console list');
+        });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('the file sink rotates rather than growing without a ceiling', async () => {
+    // The file shares a volume with the SQLite replica — history that cannot be
+    // re-synced from n8n. Logging must never be the reason that volume fills
+    // up, so this is the one property worth a real (tiny) size threshold rather
+    // than trusting the arithmetic by inspection.
+    const { dir, file } = tempLogDir('rotate');
+    try {
+        await withLogger({
+            LOG_FILE: file, LOG_FILE_MAX_BYTES: '200', LOG_FILE_BACKUPS: '1', LOG_FORMAT: 'json'
+        }, async ({ logger, flush }) => {
+            const log = logger('SYNC');
+            for (let i = 0; i < 40; i++) log.info(`line number ${i} padded out a bit further`);
+            await flush();
+            // Rotation is asynchronous (the stream has to close before the
+            // rename); give the one pending rotation a moment to land.
+            await new Promise((r) => { setTimeout(r, 100); });
+
+            assert.ok(fs.existsSync(`${file}.1`), 'a backup exists once the threshold was crossed');
+            assert.ok(!fs.existsSync(`${file}.2`),
+                'LOG_FILE_BACKUPS=1 means exactly one backup, never a second');
+            assert.ok(fs.statSync(file).size < 400, 'the active file is small — it just rotated');
+        });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('LOG_FILE=off disables the file sink cleanly, console unaffected', async () => {
+    await withLogger({ LOG_FILE: 'off', LOG_CONSOLE_COMPONENTS: 'SYNC', LOG_FORMAT: 'json' },
+        async ({ logger, flush, logFilePath }) => {
+            assert.equal(logFilePath, null);
+
+            const captured = [];
+            const realWrite = process.stdout.write.bind(process.stdout);
+            process.stdout.write = (chunk) => { captured.push(String(chunk)); return true; };
+            try {
+                logger('SYNC').info('still narrating the console with the file sink off');
+            } finally {
+                process.stdout.write = realWrite;
+            }
+            await flush(); // must resolve even with nothing to flush
+            assert.match(captured.join(''), /still narrating/);
+        });
 });
 
 // ----------------------------------------------------------------- error parser
@@ -793,6 +946,108 @@ test('the execution fetch is bounded on both paths', () => {
     assert.equal(fetches.length, 2, 'boot and incremental — if this changes, check the new one too');
     for (const q of fetches) {
         assert.match(q, /LIMIT \$\d/, `an unbounded execution fetch: ${q.slice(0, 120)}`);
+    }
+});
+
+// ------------------------------------------------- the first-sync experience
+//
+// A first sync does not finish in one pass and never did: five stages are
+// bounded on purpose so no cycle holds the write gate for minutes. What was
+// missing is that nothing SAID so — the dashboard showed plausible, quietly
+// incomplete numbers, and the remedy a person arrives at unaided is pressing
+// "Sync now" over and over.
+
+test('the catch-up percentage only ever moves forward, and says which state it is in', () => {
+    const { catchUpState } = require(path.join(ROOT, 'src/dao/insightsDao'))._internal;
+
+    // Nothing owed, and never run, are opposite situations with the same empty
+    // backlog. Reporting both as "complete" is how an instance that has not
+    // started looks finished.
+    const never = catchUpState({ total: 0 }, 0, { passes: 0, hasData: false });
+    assert.equal(never.active, false);
+    assert.equal(never.phase, 'never_run');
+    assert.equal(never.pct, 0);
+
+    const done = catchUpState({ total: 0 }, 0, { passes: 12, hasData: true });
+    assert.equal(done.phase, 'complete');
+    assert.equal(done.pct, 100);
+
+    // Mid catch-up: half the baseline left is half done.
+    const half = catchUpState(
+        { total: 50000, stage: 'executions', executions: 50000, mirrored: 0, analytics: 0, fingerprints: 0 },
+        100000, { passes: 9, hasData: true }
+    );
+    assert.equal(half.active, true);
+    assert.equal(half.phase, 'catching_up');
+    assert.equal(half.pct, 50);
+    assert.equal(half.stage, 'executions');
+
+    // An empty replica on its first pass is a different message: the pages are
+    // blank and that is not a fault.
+    assert.equal(
+        catchUpState({ total: 900, stage: 'executions' }, 1000, { passes: 1, hasData: false }).phase,
+        'first_run'
+    );
+
+    // ── The two ways a percentage lies, both refused ────────────────────
+    //
+    // Never 100 while work remains: "100%" beside a spinner is the shape that
+    // makes somebody stop waiting and start pressing things.
+    const nearlyThere = catchUpState({ total: 1 }, 1000000, { passes: 5, hasData: true });
+    assert.ok(nearlyThere.pct < 100, 'anything outstanding is never reported as finished');
+
+    // And never 0 once it is under way, which reads as stuck.
+    const justStarted = catchUpState({ total: 999999 }, 1000000, { passes: 5, hasData: true });
+    assert.ok(justStarted.pct >= 1);
+
+    // A backlog LARGER than the baseline cannot produce a negative percentage.
+    // It happens for real: extracting error detail creates the rows the
+    // fingerprint walk then has to group, so a later stage adds work the first
+    // measurement could not see.
+    const grew = catchUpState({ total: 5000 }, 1000, { passes: 3, hasData: true });
+    assert.ok(grew.pct >= 1 && grew.pct < 100, `a grown backlog stays in range, got ${grew.pct}`);
+});
+
+test('the sync backlog counts what is still to do, not what can never be done', async () => {
+    // The bug this protects against was found by looking at the real replica:
+    // 404,632 rows have `mode IS NULL` and always will, because n8n pruned the
+    // executions they would have been filled from. The walk passes over them and
+    // correctly declares itself finished.
+    //
+    // Counting all null rows would therefore report a backlog that never reaches
+    // zero — a catch-up with no end, and a scheduler calling passes until it hit
+    // its own safety cap. It counts what the walk will LOOK AT instead: the same
+    // `id > cursor` the walk chunks over.
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    const { syncBacklog, BACKFILL_CURSOR_KEY } = require(path.join(ROOT, 'src/dao/syncDao'));
+
+    const before = await localDb.query(
+        'SELECT value FROM dashboard_settings WHERE key = ?', [BACKFILL_CURSOR_KEY]);
+    const original = before.rows[0]?.value ?? null;
+
+    const put = (v) => localDb.exclusive(() => localDb.execute(
+        'INSERT INTO dashboard_settings (key, value) VALUES (?, ?) ' +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value', [BACKFILL_CURSOR_KEY, v]));
+
+    try {
+        await put('done');
+        assert.equal((await syncBacklog()).mirrored, 0, 'a finished walk owes nothing');
+
+        // A cursor partway down owes strictly less than one at the start. This is
+        // the assertion that a half-finished walk shows progress at all.
+        await put('0');
+        const fromStart = (await syncBacklog()).mirrored;
+        await put(String(Number.MAX_SAFE_INTEGER));
+        const fromEnd = (await syncBacklog()).mirrored;
+        assert.equal(fromEnd, 0, 'a cursor past every row owes nothing');
+        assert.ok(fromStart >= fromEnd, 'the count follows the cursor rather than the table');
+    } finally {
+        if (original === null) {
+            await localDb.exclusive(() => localDb.execute(
+                'DELETE FROM dashboard_settings WHERE key = ?', [BACKFILL_CURSOR_KEY]));
+        } else {
+            await put(original);
+        }
     }
 });
 

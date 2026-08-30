@@ -454,6 +454,14 @@
      * Uses ?brief=1 — the full health payload counts half a million rows, and
      * this runs on every page load of every page.
      */
+    /** The stage names, in the reader's vocabulary rather than the ETL's. */
+    const STAGE_WORDS = {
+        executions: 'reading executions',
+        details: 'filling in execution details',
+        errors: 'extracting error detail',
+        grouping: 'grouping errors'
+    };
+
     async function checkSyncLag() {
         const el = document.getElementById('syncLagIndicator');
         if (!el) return;
@@ -477,6 +485,23 @@
             const detail = `Last ETL pass ${since} ago (${d.pipeline.last_status || 'unknown'}). ` +
                 `Newest execution in the replica is ${dataAge} old.`;
 
+            // Catching up outranks everything below it, and that ordering is the
+            // point. A replica mid-catch-up has a pipeline running perfectly on
+            // schedule — `pipeline.status` is 'ok' — while every total on every
+            // page is a floor. "Synced 12s ago" is true and is the single most
+            // misleading thing the interface could say at that moment.
+            const catching = d.catching_up;
+            if (catching && catching.active) {
+                window.SyncProgress?.show(catching);
+                paintStatus(el, 'warning', 'fa-arrows-rotate',
+                    `Catching up · ${catching.pct}%`,
+                    `${catching.remaining.toLocaleString()} rows still to process ` +
+                    `(${STAGE_WORDS[catching.stage] || catching.stage}). The pages work, but ` +
+                    'totals are incomplete until this finishes.');
+                return;
+            }
+            window.SyncProgress?.hide(catching);
+
             if (d.pipeline.status === 'stalled') {
                 paintStatus(el, 'critical', 'fa-triangle-exclamation', `Sync stalled · ${since}`, detail);
             } else if (d.pipeline.status === 'late') {
@@ -499,5 +524,18 @@
 
     // A tab can sit open for hours. "Synced 2m ago", true when the tab was
     // opened this morning, is worse than no indicator at all.
-    setInterval(checkSyncLag, 60000);
+    //
+    // Faster while catching up. Sixty seconds is right for a status line that
+    // changes twice an hour and useless for a percentage somebody is watching
+    // to decide whether to wait — and it is the same call either way, so the
+    // interval follows what the last answer said rather than being two timers.
+    let lagTimer = null;
+    function scheduleLagCheck(ms) {
+        clearInterval(lagTimer);
+        lagTimer = setInterval(checkSyncLag, ms);
+    }
+    document.addEventListener('sync:progress', (event) => {
+        scheduleLagCheck(event.detail && event.detail.active ? 5000 : 60000);
+    });
+    scheduleLagCheck(60000);
 })();

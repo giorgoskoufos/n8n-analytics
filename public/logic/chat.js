@@ -46,5 +46,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // this page. Same registry, same turn — see src/ai/turns.js.
     await chat.resumeInFlight();
 
-    document.getElementById('assistantInput')?.focus();
+    // Not on a phone: arriving at the full-page chat to read this morning's
+    // thread and being handed a keyboard hides the thread. See
+    // UI.focusUnlessTouch.
+    window.UI?.focusUnlessTouch(document.getElementById('assistantInput'));
 });

@@ -7,7 +7,8 @@ const express = require('express');
 const http = require('http');
 const helmet = require('helmet');
 const path = require('path');
-const log = require('./src/utils/logger').logger('SERVER');
+const { logger, logFilePath, flush: flushLogs } = require('./src/utils/logger');
+const log = logger('SERVER');
 const { requestLog } = require('./src/middlewares/requestLog');
 
 // Route Imports
@@ -204,7 +205,7 @@ app.use((err, req, res, next) => {
 
 // ETL Sync Engine
 const cron = require('node-cron');
-const { syncData, waitForIdle, backfillFingerprints } = require('./src/config/syncJob');
+const { syncData, waitForIdle, backfillFingerprints, syncBacklog } = require('./src/config/syncJob');
 const { runAlertPass } = require('./src/config/alertEngine');
 
 // Start competing for the ETL lock immediately. The heartbeat runs whether or
@@ -214,8 +215,106 @@ const { runAlertPass } = require('./src/config/alertEngine');
 instanceLock.startHeartbeat();
 
 const syncInterval = process.env.SYNC_INTERVAL_MINUTES || 5;
+
+/**
+ * How soon a cycle that did not finish tries again.
+ *
+ * ── The behaviour this replaces ──────────────────────────────────────────
+ *
+ * Five stages of a pass are deliberately bounded — executions by a row limit,
+ * the analytics queue by its chunk size, three backfills by a time budget each
+ * — so that no single cycle holds the write gate for minutes. Correct, and it
+ * means a fresh instance is not finished after one pass.
+ *
+ * The scheduler did not know that. It ran, stopped, and slept five minutes,
+ * whether the replica was complete or 400,000 rows short. On a new instance
+ * that reads as a dashboard which is simply wrong for half an hour, and the
+ * remedy a person arrives at unaided is pressing "Sync now" over and over —
+ * doing by hand the one thing a scheduler exists for.
+ *
+ * So a pass that reports a backlog schedules the next one in seconds. The gap
+ * is not zero: each pass opens Postgres connections and takes the write gate,
+ * and a hot loop would spend a first-run instance's entire capacity on catching
+ * up while somebody is trying to read the pages. Fifteen seconds is enough to
+ * stay responsive and small enough that a quarter of a million rows lands in
+ * minutes rather than in hours of five-minute naps.
+ */
+const CATCHUP_DELAY_MS = Number(process.env.SYNC_CATCHUP_DELAY_MS) || 15000;
+
+/**
+ * A cap on consecutive catch-up passes, which is a safety net and not a policy.
+ *
+ * The backlog shrinks every pass, so this should never be reached — the honest
+ * reason it exists is that "should never" and "cannot" are different words, and
+ * a stage that reports work it cannot actually complete would otherwise loop
+ * against the production database until somebody noticed. Reaching it drops back
+ * to the ordinary cron interval and says so.
+ */
+const MAX_CATCHUP_PASSES = Number(process.env.SYNC_CATCHUP_MAX_PASSES) || 240;
+
+let catchUpTimer = null;
+let catchUpPasses = 0;
+
+/**
+ * Runs a pass, then decides whether the next one waits for cron or for seconds.
+ *
+ * Every entry point goes through here — boot, cron, and the catch-up chain
+ * itself — so there is one place that knows the rule. A second call site that
+ * called `syncData` directly would be a pass that silently stops the chain.
+ */
+async function runSyncPass(reason) {
+    clearTimeout(catchUpTimer);
+    catchUpTimer = null;
+
+    let backlog = null;
+    try {
+        const result = await syncData();
+        backlog = result && result.backlog;
+        // A failed pass has no backlog to trust, but the previous measurement
+        // still stands — otherwise one unreachable-Postgres cycle would end a
+        // catch-up that has hundreds of thousands of rows left to do.
+        if (!backlog && result && result.status !== 'ok') {
+            backlog = await syncBacklog().catch(() => null);
+        }
+    } catch (err) {
+        log.error('Sync pass failed:', err.message);
+        return;
+    }
+
+    if (!backlog || backlog.total <= 0) {
+        if (catchUpPasses > 0) {
+            log.info(`Catch-up finished after ${catchUpPasses} extra pass(es). The replica is complete.`);
+        }
+        catchUpPasses = 0;
+        return;
+    }
+
+    if (catchUpPasses >= MAX_CATCHUP_PASSES) {
+        log.warn(
+            `Still ${backlog.total.toLocaleString()} rows behind after ${catchUpPasses} ` +
+            'consecutive catch-up passes. Falling back to the normal interval — something is ' +
+            'reporting work it is not completing.'
+        );
+        catchUpPasses = 0;
+        return;
+    }
+
+    catchUpPasses += 1;
+    log.info(
+        `${backlog.total.toLocaleString()} rows still to process (${backlog.stage}); ` +
+        `next pass in ${Math.round(CATCHUP_DELAY_MS / 1000)}s (${reason} → catch-up ${catchUpPasses}).`
+    );
+    catchUpTimer = setTimeout(() => runSyncPass('catch-up'), CATCHUP_DELAY_MS);
+    // Unref'd so a process that is otherwise done shutting down is not held open
+    // by a timer whose whole purpose is to run later.
+    if (catchUpTimer.unref) catchUpTimer.unref();
+}
+
 const syncTask = cron.schedule(`*/${syncInterval} * * * *`, () => {
-    syncData();
+    // A cron tick while a catch-up chain is running would double the load on the
+    // source for no gain: the chain is already going faster than cron does.
+    if (catchUpTimer) return;
+    runSyncPass('scheduled');
 });
 
 // Run an initial sync on boot. The handle is kept so a shutdown arriving inside
@@ -226,7 +325,7 @@ const syncTask = cron.schedule(`*/${syncInterval} * * * *`, () => {
 // the connection timeout before the first assertion.
 const bootSyncTimer = process.env.SKIP_BOOT_SYNC === '1'
     ? null
-    : setTimeout(() => { syncData(); }, 2000);
+    : setTimeout(() => { runSyncPass('boot'); }, 2000);
 
 /**
  * Error fingerprinting (F-07), scheduled apart from the ETL.
@@ -293,6 +392,13 @@ localDb.ready.then(() => {
     server.listen(port, () => {
         log.info(`🚀 n8n Analytics Dashboard modularized and listening at http://localhost:${port}`);
         log.info(`📡 Press Ctrl+C to stop the server`);
+        // Said once, because a first-time deploy is exactly when somebody wants
+        // to know this without reading the .env.example comment first — the
+        // console is deliberately narrow now (see logger.js), so the file this
+        // line names is where everything else — HTTP, DB, AI, alerts — went.
+        log.info(logFilePath
+            ? `📝 Structured logs (json lines): ${logFilePath}`
+            : '📝 Structured log file disabled (LOG_FILE=off) — console only.');
     });
 });
 
@@ -303,7 +409,10 @@ server.on('error', (err) => {
     } else {
         log.error('❌ Server error:', err);
     }
-    process.exit(1);
+    // Best-effort: this fires before most of the app has done anything worth
+    // losing, but the error line above is worth keeping if the file sink
+    // already opened. flush() resolves even when nothing is buffered.
+    flushLogs().finally(() => process.exit(1));
 });
 
 // --- Graceful shutdown ---
@@ -320,6 +429,11 @@ let shuttingDown = false;
 
 // Resolves either way. Used for teardown steps that are allowed to fail: one
 // stuck step must not consume the whole budget and take the rest down with it.
+/** Flushes the log file with its own short budget — see the note above `flush()`. */
+function flushBeforeExit() {
+    return withTimeout(flushLogs(), 1000, 'Log flush');
+}
+
 function withTimeout(promise, ms, label) {
     return Promise.race([
         Promise.resolve(promise).catch((err) => {
@@ -349,13 +463,17 @@ async function shutdown(signal, exitCode = 0) {
     // the SIGKILL, which would defeat the entire purpose.
     const guard = setTimeout(() => {
         log.error('Deadline exceeded — forcing exit.');
-        process.exit(1);
+        flushBeforeExit().finally(() => process.exit(1));
     }, SHUTDOWN_DEADLINE_MS);
     guard.unref();
 
     try {
         // 1. Stop scheduling new work first, so nothing starts while we drain.
         if (bootSyncTimer) clearTimeout(bootSyncTimer);
+        // The catch-up chain schedules itself, so stopping cron is not enough to
+        // stop it: without this a shutdown that lands between two catch-up passes
+        // starts an ETL pass on the way out.
+        if (catchUpTimer) clearTimeout(catchUpTimer);
         if (fingerprintTimer) clearTimeout(fingerprintTimer);
         if (syncTask) (syncTask.destroy || syncTask.stop).call(syncTask);
         if (fingerprintTask) (fingerprintTask.destroy || fingerprintTask.stop).call(fingerprintTask);
@@ -394,9 +512,11 @@ async function shutdown(signal, exitCode = 0) {
 
         clearTimeout(guard);
         log.info('✅ Stopped cleanly.');
+        await flushBeforeExit();
         process.exit(exitCode);
     } catch (err) {
         log.error('Error while shutting down:', err);
+        await flushBeforeExit();
         process.exit(1);
     }
 }

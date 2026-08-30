@@ -12,6 +12,10 @@ const {
 const instanceLock = require('./instanceLock');
 const { invalidateScopeCache } = require('../utils/scope');
 const log = require('../utils/logger').logger('SYNC');
+// The backlog is counted in the DAO — see the header of dao/syncDao for why the
+// dependency runs this way round. The keys come from there too, so the writer
+// and the reader cannot disagree about what a setting is called.
+const { syncBacklog, EXEC_BEHIND_KEY, CATCHUP_BASELINE_KEY } = require('../dao/syncDao');
 
 let isSyncing = false;
 
@@ -537,6 +541,10 @@ async function runSyncPass() {
             );
             remaining = Number(rest.rows[0].n) || 0;
         }
+        // Written down, because everything else that reads "are we behind" reads
+        // only the replica — the health endpoint the header polls on every page
+        // load must never open a Postgres connection to answer a status line.
+        await putSetting(EXEC_BEHIND_KEY, String(remaining));
         step('executions', remaining > 0
             ? `${syncedCount} new or changed · batch full at ${EXEC_BATCH_LIMIT}, ` +
               `${remaining.toLocaleString()} still behind — resuming next cycle`
@@ -592,8 +600,17 @@ async function runSyncPass() {
         // Where n8n's own pruning currently stands (F-04).
         await recordSourceHorizon();
 
+        // Read after every stage has had its turn, so it describes what is left
+        // rather than what was left when the cycle began.
+        const backlog = await syncBacklog().catch((err) => {
+            log.warn(`Could not measure the sync backlog: ${err.message}`);
+            return null;
+        });
+        if (backlog) await maintainCatchUpBaseline(backlog.total);
+
         const result = {
             status: 'ok',
+            backlog,
             workflows: workflows.rows.length,
             executions: syncedCount,
             rowsRead: newExecs.rows.length,
@@ -607,7 +624,10 @@ async function runSyncPass() {
             statistics,
             organisation
         };
-        step('done', `${syncedCount} executions synced`);
+        step('done', backlog && backlog.total > 0
+            ? `${syncedCount} executions synced · ${backlog.total.toLocaleString()} rows still to ` +
+              `process (${backlog.stage}) — continuing`
+            : `${syncedCount} executions synced`);
         await recordSyncRun(runStartedAt, runStartedHr, result);
         return result;
 
@@ -701,6 +721,44 @@ async function putSetting(key, value) {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
         [key, value]
     );
+}
+
+/**
+ * Keeps the denominator behind the catch-up percentage.
+ *
+ * A backlog on its own is a count going down, and a count going down is not
+ * progress: "84,000 rows to go" does not tell somebody whether to wait or come
+ * back tomorrow. The baseline is the backlog at the moment the catch-up began,
+ * so a percentage can be built that only ever moves forward.
+ *
+ * It is written HERE, by the cycle, rather than by the endpoint that displays
+ * it — a GET that the header polls from every page of every tab must not write
+ * to the replica, and two tabs racing to establish the same baseline is a way
+ * to get two different ones.
+ *
+ * It only ever RISES within a catch-up. A later stage can add rows the earlier
+ * count did not know about — extracting error analytics is what produces the
+ * rows the fingerprint walk then has to group — so a baseline pinned at the
+ * first measurement would let the remaining count exceed it and the percentage
+ * run backwards past zero. Raising it means the bar moves when the job turns
+ * out to be bigger, which is honest; the number it shows still never goes down.
+ */
+async function maintainCatchUpBaseline(total) {
+    try {
+        if (total <= 0) {
+            await localDb.execute(
+                'DELETE FROM dashboard_settings WHERE key = ?', [CATCHUP_BASELINE_KEY]);
+            return;
+        }
+        const stored = await localDb.query(
+            'SELECT value FROM dashboard_settings WHERE key = ?', [CATCHUP_BASELINE_KEY]);
+        const baseline = Number(stored.rows[0]?.value) || 0;
+        if (total > baseline) await putSetting(CATCHUP_BASELINE_KEY, String(total));
+    } catch (err) {
+        // A missing percentage is a cosmetic loss. Failing the ETL pass over it
+        // would trade a status line for the data it describes.
+        log.warn(`Could not record the catch-up baseline: ${err.message}`);
+    }
 }
 
 // The oldest execution n8n itself still has (F-04).
@@ -2232,6 +2290,11 @@ module.exports = {
     batchLimitFor,
     EXEC_BATCH_LIMIT,
     ID_OVERLAP,
+    // Re-exported, not defined here: the counting lives in dao/syncDao so the
+    // health endpoint can ask without pulling the whole ETL module into a
+    // request. This address exists because the scheduler already imports from
+    // here and a second import path for one fact is one of them going stale.
+    syncBacklog,
     syncData,
     syncAuthorization,
     updateExecutionVolumeStats,

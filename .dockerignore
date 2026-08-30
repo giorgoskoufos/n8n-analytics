@@ -14,6 +14,12 @@
 *.sqlite-shm
 *.sqlite.backup-*
 
+# Same reasoning, for the structured log file (see src/utils/logger.js): local
+# dev runs write it to ./logs, and it belongs on the /data volume at runtime,
+# not baked into the image.
+logs/
+*.jsonl
+
 # Built on the host — often for a different platform than the Alpine image.
 # Copying these in silently breaks the native bcrypt and sqlite3 bindings.
 node_modules

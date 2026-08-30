@@ -23,6 +23,7 @@ relevant/
 tasks.md
 TODO-FIXES.md
 TODO-FEATURES.md
+handoff-ai/
 
 # --- Generated / dumped artifacts ---
 custom_logs.dropped.json
@@ -39,6 +40,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+# The structured json-lines log the app writes itself (see src/utils/logger.js).
+# Lands in `logs/` beside the local dashboard.sqlite by default — real
+# operational data, not source, same reasoning as the *.sqlite* rule above it.
+logs/
+*.jsonl
 
 # --- Editor & OS ---
 .DS_Store
@@ -46,7 +52,21 @@ Thumbs.db
 desktop.ini
 *.swp
 .idea/
-.vscode/
+# NOT .vscode/ — .vscode/settings.json is deliberately tracked and shared (CSS
+# lint rules everyone on this project wants), so ignoring the whole directory
+# was silently defeated by that one file already being committed. Ignore only
+# what is genuinely personal within it — a local override or a debug launch
+# config nobody else should inherit.
+.vscode/*.local.json
+.vscode/launch.json
+
+# --- Claude Code ---
+# `settings.local.json` is Claude Code's own convention for the personal half
+# of its config (per-machine plugin toggles here) — `settings.json` without
+# `.local` is the shared one and stays tracked. This one was only excluded by
+# this machine's global git config, not the project's, so anyone else's clone
+# had no protection.
+.claude/settings.local.json
 
 # Recorded eval runs. Real workflow names, real execution ids, real answers —
 # it is a copy of the instance's data wearing a different file extension, and it

@@ -853,6 +853,81 @@
     .roi-row-inputs > .btn { flex: 1 1 100%; justify-content: center; }
   }
 
+  /* ---- First-run sync sheet -------------------------------------------- */
+  /*
+     Shown only while a brand-new replica is filling. See
+     logic/ui/sync-progress.js for why it is a sheet on the first run and a line
+     in the sidebar every other time.
+  */
+
+  .sync-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    /* Backed rather than blurred: what is behind it is an empty dashboard, and
+       blurring nothing costs a compositor layer to hide a blank page. */
+    background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+  }
+
+  .sync-sheet-card {
+    width: 100%;
+    max-width: 26rem;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 1.5rem;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.7);
+  }
+
+  .sync-sheet-head { display: flex; gap: 0.875rem; align-items: flex-start; }
+  .sync-sheet-head > i { color: var(--brand); font-size: 1.125rem; margin-top: 0.2rem; }
+  .sync-sheet-head h2 {
+    font-size: 1rem;
+    font-weight: 650;
+    color: var(--ink-1);
+    margin-bottom: 0.25rem;
+  }
+  .sync-sheet-head p { font-size: 12px; color: var(--ink-2); }
+
+  .sync-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    overflow: hidden;
+    margin: 1.25rem 0 0.5rem;
+  }
+  .sync-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: var(--brand);
+    /* Slow, because the underlying number updates every few seconds and a bar
+       that snaps between values reads as broken rather than as fast. */
+    transition: width 0.6s ease;
+  }
+
+  .sync-sheet-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .sync-sheet-meta > span:first-child { color: var(--ink-1); font-weight: 700; }
+
+  .sync-sheet-note {
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--ink-3);
+    margin: 1rem 0 1.25rem;
+  }
+
+  .sync-sheet-card > .btn { width: 100%; justify-content: center; }
+
   /* ---- Empty and loading are different states ------------------------- */
   /*
      F-24 §1: "empty ≠ zero" and "a distinct loading state, not the same as

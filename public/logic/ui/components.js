@@ -348,6 +348,39 @@
         }
     }
 
+    /**
+     * Focus, unless focusing would summon the on-screen keyboard uninvited.
+     *
+     * ── The problem, which only exists on touch ──────────────────────────
+     *
+     * On a desktop, focusing a text field is free: the caret lands somewhere
+     * useful and nothing moves. On a phone it is not free — it raises the
+     * keyboard, which takes half the viewport, pushes the layout up, and covers
+     * the thing the person opened. Opening the assistant to READ an answer and
+     * being handed a keyboard is the common case, and it makes the panel feel
+     * like it is demanding to be typed into.
+     *
+     * So autofocus becomes a desktop-only affordance. Anywhere a person's action
+     * was explicitly about the text field — tapping it, tapping a suggestion
+     * that fills it — the browser focuses it anyway and this helper is not
+     * involved.
+     *
+     * `pointer: coarse` rather than a width breakpoint: what decides this is
+     * whether there is a physical keyboard, not how wide the window is. A narrow
+     * desktop window has a keyboard and should still autofocus; a tablet in
+     * landscape is wide and should not.
+     */
+    function focusUnlessTouch(el) {
+        if (!el) return false;
+        try {
+            if (window.matchMedia('(pointer: coarse)').matches) return false;
+        } catch (ignored) {
+            // An engine without matchMedia is not a phone.
+        }
+        el.focus();
+        return true;
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // HTML error bodies — F-24 §3
     // ─────────────────────────────────────────────────────────────────────
@@ -437,6 +470,7 @@
         crumbs,
         scroll,
         revealTab,
+        focusUnlessTouch,
         readHtmlError,
         errorMessage
     };

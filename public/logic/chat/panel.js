@@ -86,8 +86,12 @@
         markUnread(false);
         window.ChatStore.patchSession({ open: true });
 
-        const input = document.getElementById('assistantInput');
-        if (input) input.focus();
+        // Deliberately NOT focused on a touch device. Opening the assistant is
+        // usually about reading — the last answer, or the examples — and raising
+        // the keyboard takes half the screen to cover exactly that. It focuses
+        // when the person taps the box, which is the moment they have said they
+        // want to type. See UI.focusUnlessTouch.
+        window.UI?.focusUnlessTouch(document.getElementById('assistantInput'));
         if (chat) chat.scrollToBottom();
     }
 

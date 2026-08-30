@@ -1249,6 +1249,74 @@ restriction.sql.split('p.workflow_id').join('e.workflow_id')}
 }
 
 /** F-19 · The dashboard observing itself. */
+/**
+ * The denominator for the catch-up percentage.
+ *
+ * A backlog on its own is a count going down, and a count going down is not
+ * progress — "84,000 rows to go" tells somebody nothing about whether to wait
+ * or come back tomorrow. The baseline is the backlog when the catch-up started,
+ * written once and cleared when it reaches zero, so the percentage only ever
+ * moves forward and means what it appears to mean.
+ *
+ * Recorded by the reader rather than by the sync, which looks backwards and is
+ * deliberate: the sync would have to know it is *starting* a catch-up, and the
+ * only honest way to know that is to compare against the previous value — which
+ * is what this does anyway, once, in the place that needs the number.
+ */
+const { syncBacklog, CATCHUP_BASELINE_KEY } = require('./syncDao');
+
+/**
+ * Turns a backlog into something a person can act on.
+ *
+ * Three states, and the difference between them is what somebody should do:
+ *
+ *   `first_run`  — nothing has been synced yet, or the first pass is still
+ *                  going. The pages are empty and that is not a fault. Wait.
+ *   `catching_up`— there is data on the pages and it is INCOMPLETE. This is the
+ *                  dangerous one: every figure reads as authoritative and every
+ *                  one of them is a floor. Wait, and distrust totals until it
+ *                  finishes.
+ *   `null`       — nothing owed. Say nothing.
+ *
+ * A stale replica is NOT one of these. "The pipeline has not run for an hour"
+ * is a different problem with a different remedy, and it is already reported by
+ * `pipeline.status`; folding the two together would tell somebody to wait for a
+ * catch-up that is not happening.
+ */
+function catchUpState(backlog, baseline, { passes, hasData }) {
+    const total = backlog ? backlog.total : 0;
+
+    if (total <= 0) {
+        return {
+            active: false,
+            // Said explicitly rather than left to be inferred from `active`,
+            // because "the first sync has never run" and "everything is up to
+            // date" are opposite situations that both have an empty backlog.
+            phase: passes === 0 ? 'never_run' : 'complete',
+            remaining: 0,
+            pct: passes === 0 ? 0 : 100
+        };
+    }
+
+    const from = Math.max(baseline, total);
+    return {
+        active: true,
+        phase: (!hasData || passes <= 1) ? 'first_run' : 'catching_up',
+        remaining: total,
+        baseline: from,
+        // Floored at 1 while there is anything left, so a catch-up in its first
+        // seconds does not display as the 100% it is nearly at by rounding.
+        pct: Math.min(99, Math.max(1, Math.round(((from - total) / from) * 100))),
+        stage: backlog.stage,
+        breakdown: {
+            executions: backlog.executions,
+            details: backlog.mirrored,
+            errors: backlog.analytics,
+            grouping: backlog.fingerprints
+        }
+    };
+}
+
 async function getSystemHealth({ brief = false }) {
     const nowMs = Date.now();
     const dayAgo = new Date(nowMs - 86400000).toISOString();
@@ -1259,16 +1327,22 @@ async function getSystemHealth({ brief = false }) {
     // records to do it — a cost worth paying once on a settings panel and
     // never worth paying for a five-word status line.
     if (brief) {
-        const [run, fresh] = await Promise.all([
+        const [run, fresh, backlog, baseline, passes] = await Promise.all([
             localDb.query(
                 'SELECT finished_at, status, error_message FROM sync_runs ORDER BY id DESC LIMIT 1'
             ),
-            localDb.query('SELECT MAX("startedAt") AS newest FROM execution_entity')
+            localDb.query('SELECT MAX("startedAt") AS newest FROM execution_entity'),
+            syncBacklog(),
+            localDb.query(
+                'SELECT value FROM dashboard_settings WHERE key = ?', [CATCHUP_BASELINE_KEY]
+            ),
+            localDb.query('SELECT COUNT(*) AS n FROM sync_runs')
         ]);
         const r = run.rows[0] || null;
         const newestIso = fresh.rows[0].newest;
         const sinceMs = r ? nowMs - Date.parse(r.finished_at) : null;
         const every = expectedIntervalMs();
+
         return ({
             brief: true,
             pipeline: {
@@ -1284,7 +1358,14 @@ async function getSystemHealth({ brief = false }) {
             data: {
                 newest_execution: newestIso,
                 data_age_ms: newestIso ? nowMs - Date.parse(newestIso) : null
-            }
+            },
+            catching_up: catchUpState(backlog, Number(baseline.rows[0]?.value) || 0, {
+                // "Has this replica ever been filled?" A count of passes rather
+                // than a flag, because it is already recorded and a flag would be
+                // a second thing to keep true.
+                passes: Number(passes.rows[0].n) || 0,
+                hasData: Boolean(newestIso)
+            })
         });
     }
 
@@ -1476,6 +1557,6 @@ module.exports = {
     // insightsController._internal as well, so the suite keeps its existing
     // entry point while there goes on being one implementation.
     _internal: {
-        forecast, sweepConcurrency, growthFrom, withVersionDeltas, expectedIntervalMs
+        forecast, sweepConcurrency, growthFrom, withVersionDeltas, expectedIntervalMs, catchUpState
     }
 };

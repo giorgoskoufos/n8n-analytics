@@ -187,7 +187,9 @@
             log.replaceChildren();
             emptyState();
             closeThreads();
-            input.focus();
+            // A menu choice, not a tap on the box — and on a phone the keyboard
+            // would cover the example questions this state exists to show.
+            window.UI?.focusUnlessTouch(input);
         }
 
         async function openConversation(id) {
@@ -544,7 +546,11 @@
                 busy(false);
                 activeTurn = null;
                 store.patchSession({ turnId: null });
-                input.focus();
+                // Puts the caret back for the next question on a desktop. On a
+                // phone it would raise the keyboard over the answer that has
+                // just finished arriving, which is the one moment somebody is
+                // certainly reading rather than typing.
+                window.UI?.focusUnlessTouch(input);
             }
         }
 
