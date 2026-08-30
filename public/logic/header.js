@@ -57,6 +57,76 @@
 
         checkN8nHealth();
         checkSyncLag();
+
+        // Last, and not awaited by anything above it: the assistant is the one
+        // part of the shell whose absence costs the page nothing.
+        mountAssistant(tpl.querySelector('#tpl-assistant'), basePath);
+    }
+
+    /**
+     * Puts the assistant on this page.
+     *
+     * ── Why the scripts are injected rather than listed in seven files ───
+     *
+     * The same argument as the rail itself. Before this the widget was in
+     * index.html and nowhere else, and its five dependencies were `<script>`
+     * tags in that one file — so "add the assistant to the Errors page" meant
+     * copying six lines into six documents and keeping them in step forever.
+     * This is the file that already knows every page has a shell.
+     *
+     * `async = false` on a dynamically created script is what makes the browser
+     * run them in insertion order instead of in whatever order they arrive.
+     * chat-core reads `window.ChatStore` and `window.ChatRender` at mount time,
+     * so the order is load-bearing.
+     *
+     * Matching on the file NAME rather than the full URL: index.html already
+     * loads marked and DOMPurify with relative paths, and an exact-URL check
+     * would load a second copy of each.
+     */
+    const ASSISTANT_SCRIPTS = [
+        '/vendor/marked.umd.js',
+        '/vendor/purify.min.js',
+        '/logic/chat/store.js',
+        '/logic/chat/render.js',
+        '/logic/chat/tags.js',
+        '/logic/chat-core.js',
+        '/logic/chat/panel.js'
+    ];
+
+    function loadScripts(sources) {
+        const loaded = [...document.scripts].map((s) => s.src.split('/').pop());
+        const wanted = sources.filter((src) => !loaded.includes(src.split('/').pop()));
+        if (!wanted.length) return Promise.resolve();
+
+        return new Promise((resolve) => {
+            let left = wanted.length;
+            const done = () => { if (--left === 0) resolve(); };
+            for (const src of wanted) {
+                const el = document.createElement('script');
+                el.src = src;
+                el.async = false;
+                el.onload = done;
+                el.onerror = () => {
+                    console.error(`[SHELL] Could not load ${src}; the assistant is unavailable.`);
+                    done();
+                };
+                document.head.appendChild(el);
+            }
+        });
+    }
+
+    async function mountAssistant(template, basePath) {
+        if (!template) return;
+        // The page that IS the conversation does not also float one over itself.
+        if (document.body.dataset.assistant === 'off') return;
+
+        try {
+            await loadScripts(ASSISTANT_SCRIPTS);
+            if (!window.AssistantPanel) return;
+            window.AssistantPanel.mount(template.content.cloneNode(true), basePath);
+        } catch (err) {
+            console.error('[SHELL] The assistant failed to mount:', err);
+        }
     }
 
     /**
@@ -201,7 +271,11 @@
         // A resize past the breakpoint leaves `data-drawer` set, and the rail
         // then reads as "open" in a layout where open means nothing.
         window.addEventListener('resize', () => {
-            if (window.innerWidth >= 1024) delete shell.dataset.drawer;
+            // Rotating into landscape past the breakpoint leaves `data-drawer`
+            // set on a layout where "open" means nothing — and, before this,
+            // left the page pinned by a scroll lock with no drawer on screen to
+            // explain why it would not scroll.
+            if (window.innerWidth >= 1024 && shell.dataset.drawer === 'open') closeDrawer();
         });
 
         wireNavHandleTracking(shell);
@@ -240,15 +314,51 @@
         window.addEventListener('resize', () => { rect = null; });
     }
 
+    /**
+     * The page does not scroll behind the drawer.
+     *
+     * Without this, a drag that starts anywhere on the scrim — which is most of
+     * the screen, and is where a thumb naturally lands — scrolls the page
+     * underneath instead of the list of links. The reader closes the drawer and
+     * finds themselves somewhere else on a page they had not moved.
+     *
+     * `position: fixed` with a negative `top` rather than `overflow: hidden`,
+     * because iOS Safari scrolls the document regardless of `overflow` on the
+     * body; the offset is what stops the page jumping to the top the moment it
+     * is pinned, and it is restored on the way out.
+     */
+    let drawerScrollY = 0;
+
+    function lockPage() {
+        drawerScrollY = window.scrollY;
+        document.body.style.position = 'fixed';
+        document.body.style.top = `-${drawerScrollY}px`;
+        document.body.style.width = '100%';
+    }
+
+    function unlockPage() {
+        if (!document.body.style.position) return;
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.width = '';
+        window.scrollTo(0, drawerScrollY);
+    }
+
     function closeDrawer() {
         const shell = document.getElementById('appShell');
-        if (shell) delete shell.dataset.drawer;
+        if (!shell || shell.dataset.drawer !== 'open') return;
+        delete shell.dataset.drawer;
+        unlockPage();
+        // Back to the button that opened it, which is where a keyboard user was
+        // standing and where a screen reader has to be put back.
+        document.querySelector('[data-action="openNavDrawer"]')?.focus();
     }
 
     window.openNavDrawer = function () {
         const shell = document.getElementById('appShell');
         if (!shell) return;
         shell.dataset.drawer = 'open';
+        lockPage();
         // Focus follows the drawer, or a screen reader stays parked on the
         // trigger behind a scrim it cannot see.
         document.querySelector('#appNav .nav-item')?.focus();

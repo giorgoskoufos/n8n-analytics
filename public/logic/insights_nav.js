@@ -114,6 +114,7 @@
             const active = btn.getAttribute('data-arg') === target;
             btn.classList.toggle('active', active);
             btn.setAttribute('aria-selected', String(active));
+            if (active) window.UI?.revealTab(btn);
         });
 
         if (!opts.fromHash) writeHash(target, opts.panel);

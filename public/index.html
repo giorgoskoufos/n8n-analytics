@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover, interactive-widget=resizes-content">
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>n8n Metrics Monitor</title>
     <script src="logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
@@ -34,7 +34,7 @@
         <div class="filter-bar mb-6">
             <div class="field grow sm:grow-0 sm:w-64">
                 <span class="label shrink-0">Workflow</span>
-                <select id="workflowFilter" class="w-full" aria-label="Filter by workflow">
+                <select id="workflowFilter" aria-label="Filter by workflow">
                     <option value="">All workflows</option>
                 </select>
                 <button id="archivedToggle" data-action="toggleArchived" type="button"
@@ -68,9 +68,9 @@
 
             <div id="customRangeContainer" class="field">
                 <span class="label shrink-0">Custom</span>
-                <input type="date" id="rangeStart" class="w-28" aria-label="Range start">
-                <span style="color:var(--ink-3)">—</span>
-                <input type="date" id="rangeEnd" class="w-28" aria-label="Range end">
+                <input type="date" id="rangeStart" aria-label="Range start">
+                <span class="field-sep" aria-hidden="true">—</span>
+                <input type="date" id="rangeEnd" aria-label="Range end">
             </div>
         </div>
 
@@ -229,7 +229,7 @@
         </div>
 
         <div class="card card-clip">
-            <div class="flex" style="border-bottom:1px solid var(--line)" role="tablist">
+            <div class="tabs" role="tablist">
                 <button data-action="switchTab" data-arg="executions" role="tab" aria-selected="true"
                     class="tab-btn active px-5 py-3.5 text-[13px] font-semibold">Executions</button>
                 <button data-action="switchTab" data-arg="slowest" role="tab" aria-selected="false"
@@ -259,9 +259,9 @@
     </div>
     <div id="detailsModal"
         class="fixed inset-0 bg-black/90 backdrop-blur-md z-[9999] hidden items-center justify-center p-4">
-        <div class="bg-n8n-card border border-line-2 rounded-2xl w-full max-w-3xl flex flex-col shadow-2xl scale-95 transition-transform duration-300 h-[80vh]"
+        <div class="bg-n8n-card border border-line-2 rounded-2xl w-full max-w-3xl flex flex-col shadow-2xl scale-95 transition-transform duration-300 h-[85dvh] md:h-[80vh]"
             id="detailsModalContainer">
-            <div class="p-6 border-b border-line flex justify-between items-center bg-black/20 shrink-0">
+            <div class="p-4 md:p-6 border-b border-line flex justify-between items-center gap-3 bg-black/20 shrink-0">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-lg bg-n8n-primary/20 flex items-center justify-center border border-n8n-primary/30">
                             <img src="assets/n8n_db.svg" alt="n8n logo" class="w-5 h-5 object-contain">
@@ -277,7 +277,7 @@
                 </button>
             </div>
             <div class="flex-1 overflow-auto p-0 relative">
-                <table class="w-full text-left">
+                <table class="w-full min-w-[30rem] text-left">
                     <thead class="sticky top-0 bg-[#1e2329] border-b border-line shadow-md">
                         <tr class="text-ink-2 text-xs uppercase tracking-widest">
                             <th class="p-4 font-semibold">Workflow</th>
@@ -292,79 +292,11 @@
             </div>
         </div>
     </div>
-    <!-- ========================================== -->
-    <!-- AI CHAT WIDGET -->
-    <!-- ========================================== -->
-    <!-- Floating Action Button -->
-    <button id="chatToggle" data-action="toggleChat"
-        class="fixed bottom-6 right-6 w-14 h-14 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full shadow-2xl flex items-center justify-center z-50 transition-all hover:rotate-12 hover:scale-110 active:scale-95 group">
-        <i class="fa-solid fa-robot text-2xl group-hover:hidden"></i>
-        <i class="fa-solid fa-xmark text-2xl hidden group-hover:block"></i>
-    </button>
-    <!-- Chat Window Container -->
-    <div id="chatWidget"
-        class="fixed lg:bottom-24 lg:right-6 inset-0 lg:inset-auto w-full lg:w-[400px] h-[100dvh] lg:h-[600px] bg-n8n-dark lg:border border-line lg:rounded-3xl shadow-2xl flex flex-col z-[100] transform transition-all translate-y-full lg:translate-y-10 opacity-0 pointer-events-none overflow-hidden origin-bottom min-w-[300px] min-h-[400px]">
-        <!-- Resize Handle (Desktop & Mobile) -->
-        <div id="chatResizeHandle"
-            class="flex absolute top-0 left-0 w-8 h-8 cursor-nw-resize z-[110] items-center justify-center group">
-            <div
-                class="w-1.5 h-1.5 bg-gray-600 rounded-full group-hover:bg-indigo-500 transition-colors shadow-[4px_4px_0_rgba(75,85,99,0.5)]">
-            </div>
-        </div>
-        <!-- Chat Header (Static) -->
-        <div class="bg-n8n-card border-b border-line p-4 flex justify-between items-center shrink-0 z-10">
-            <div class="flex items-center gap-3">
-                <div class="bg-n8n-primary/20 w-8 h-8 flex items-center justify-center rounded-lg border border-n8n-primary/30 shadow-inner shrink-0">
-                    <img src="assets/n8n_db.svg" alt="n8n logo" class="w-5 h-5 object-contain">
-                </div>
-                <div>
-                    <h4 class="text-sm font-bold">n8n AI Assistant</h4>
-                    <p class="text-[10px] text-green-500 flex items-center gap-1">
-                        <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span> Analyzing Live Data
-                    </p>
-                </div>
-            </div>
-            <button data-action="toggleChat"
-                class="text-ink-3 hover:text-white transition-colors p-2 h-10 w-10 flex items-center justify-center">
-                <i class="fa-solid fa-xmark text-lg sm:fa-minus sm:text-base"></i>
-            </button>
-        </div>
-        <!-- Chat Messages (Scrollable / Shrinkable) -->
-        <main id="chatBox" class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 scroll-smooth overscroll-contain">
-            <div class="flex gap-4 items-start w-full">
-                <div
-                    class="bg-indigo-600/10 border border-indigo-500/20 w-8 h-8 shrink-0 flex items-center justify-center rounded-full mt-1">
-                    <i class="fa-solid fa-robot text-indigo-400 text-sm"></i>
-                </div>
-                <div class="bg-n8n-card border border-line p-3 rounded-2xl rounded-tl-none max-w-[85%] shadow-sm">
-                    <p class="text-xs leading-relaxed">Hi! I can analyze your metrics and answer questions about your
-                        workflows.<br><br>Try: <span class="text-ink-2 italic">"What were the top 3 workflows
-                            yesterday by execution count?"</span></p>
-                </div>
-            </div>
-        </main>
-        <!-- Chat Input (Rises with keyboard) -->
-        <footer class="bg-n8n-card border-t border-line p-4 shrink-0 z-10">
-            <div
-                class="relative flex items-center bg-black/40 border border-line-2 rounded-xl focus-within:border-indigo-500 transition-colors">
-                <textarea id="userInput" rows="1" placeholder="Ask about your data..."
-                    class="bg-transparent border-none w-full py-3 pl-4 pr-12 text-base text-white focus:outline-none resize-none max-h-32"></textarea>
-                <button id="sendBtn"
-                    class="absolute right-2 w-8 h-8 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors shadow-lg shadow-indigo-600/20">
-                    <i class="fa-solid fa-paper-plane text-xs"></i>
-                </button>
-            </div>
-            <p class="text-[9px] text-ink-3 mt-2 text-center italic">AI responses are limited to database analysis.
-            </p>
-        </footer>
-    </div>
     <script src="logic/global_functions.js"></script>
     <script src="logic/ui/components.js"></script>
-    <script src="logic/chat-core.js"></script>
     <script src="logic/ui/viz.js"></script>
     <script src="logic/error-modal.js"></script>
     <script type="module" src="logic/app.js"></script>
-    <script src="logic/chat-widget.js"></script>
     <script src="logic/header.js"></script>
 </body>
 </html>

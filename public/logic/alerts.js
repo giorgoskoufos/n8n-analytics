@@ -420,7 +420,7 @@ function ruleForm() {
         ${field('Fire when', select('formType', typeOptions),
     escapeHtml(spec.description || ''))}
         ${thresholdField}
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             ${field('Measured over (minutes)',
         input('formWindow', existing.window_minutes ?? defaults.window_minutes, 'type="number" min="1"'))}
             ${field('At most one alert per (minutes)',

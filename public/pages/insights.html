@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Insights - n8n Dashboard</title>
     <script src="../logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
@@ -32,7 +33,7 @@
           scrolls to the right panel, so a specific answer is linkable.
         -->
         <div class="card card-clip mb-6">
-            <div class="flex flex-wrap" role="tablist" aria-label="Insight groups">
+            <div class="tabs" role="tablist" aria-label="Insight groups">
                 <button class="tab-btn px-5 py-3.5 text-[13px] font-semibold" role="tab"
                         aria-selected="true"
                         data-action="showInsightsGroup" data-arg="traffic">
@@ -57,44 +58,53 @@
         </div>
 
 
-        <!-- Time Range Controls -->
-        <div class="flex flex-col sm:flex-row justify-end items-center mb-8 gap-4 w-full">
-            <div id="presetRangeContainer" class="flex items-center gap-2">
-                <button id="btn24h" data-action="setInsightsRange" data-arg="24"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-line rounded-lg text-[10px] text-ink-3 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-ink-2 transition-all duration-300">24h</button>
-                <button id="btn48h" data-action="setInsightsRange" data-arg="48"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-line rounded-lg text-[10px] text-ink-3 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-ink-2 transition-all duration-300">48h</button>
-                <button id="btn7d" data-action="setInsightsRange" data-arg="168"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-line rounded-lg text-[10px] text-ink-3 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-ink-2 transition-all duration-300">7d</button>
-                <button id="btn14d" data-action="setInsightsRange" data-arg="336"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-line rounded-lg text-[10px] text-ink-3 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-ink-2 transition-all duration-300">14d</button>
-                <button id="btn30d" data-action="setInsightsRange" data-arg="720"
-                    class="px-3 py-2 h-[42px] bg-n8n-card border border-line rounded-lg text-[10px] text-ink-3 font-bold uppercase tracking-widest hover:border-gray-600 hover:text-ink-2 transition-all duration-300">30d</button>
+        <!--
+          One filter row, on the shared vocabulary.
+
+          This row was the last hand-rolled copy of `.filter-bar` in the app:
+          five preset buttons each carrying eleven Tailwind classes, three boxes
+          re-typing what `.field` already is, and an active state applied by
+          adding `border-indigo-500/40` from JavaScript — indigo, on a page whose
+          every other accent comes from a token.
+
+          It also did not fit a phone. `flex-col sm:flex-row` with `items-center`
+          centred each control on a row of its own, which spent 380px of vertical
+          space saying what one wrapped row says: the presets, then the folder,
+          then the tag, then the dates. `.filter-bar` wraps, and below `sm` each
+          field takes the whole row, which is the same arrangement arrived at on
+          purpose rather than by running out of width.
+
+          `aria-pressed` carries the selected preset now, so the highlight and
+          the accessibility tree cannot disagree.
+        -->
+        <div class="filter-bar mb-6">
+            <div id="presetRangeContainer" class="flex items-center gap-1.5" role="group" aria-label="Time range">
+                <button id="btn24h" data-action="setInsightsRange" data-arg="24" class="chip" aria-pressed="false">24h</button>
+                <button id="btn48h" data-action="setInsightsRange" data-arg="48" class="chip" aria-pressed="false">48h</button>
+                <button id="btn7d" data-action="setInsightsRange" data-arg="168" class="chip" aria-pressed="true">7d</button>
+                <button id="btn14d" data-action="setInsightsRange" data-arg="336" class="chip" aria-pressed="false">14d</button>
+                <button id="btn30d" data-action="setInsightsRange" data-arg="720" class="chip" aria-pressed="false">30d</button>
             </div>
-            <div class="flex items-center gap-3 h-[42px] bg-n8n-card border border-line rounded-lg px-4 py-2 hover:border-line-2 transition-colors">
-                <span class="text-[10px] text-ink-3 font-bold uppercase tracking-widest mb-0">Folder</span>
-                <select id="folderFilter"
-                    class="bg-transparent border-none text-sm text-n8n-text font-semibold focus:outline-none cursor-pointer">
+
+            <div class="field">
+                <span class="label shrink-0">Folder</span>
+                <select id="folderFilter" aria-label="Filter by folder">
                     <option value="">All</option>
                 </select>
             </div>
-            <div class="flex items-center gap-3 h-[42px] bg-n8n-card border border-line rounded-lg px-4 py-2 hover:border-line-2 transition-colors">
-                <span class="text-[10px] text-ink-3 font-bold uppercase tracking-widest mb-0">Tag</span>
-                <select id="tagFilter"
-                    class="bg-transparent border-none text-sm text-n8n-text font-semibold focus:outline-none cursor-pointer">
+
+            <div class="field">
+                <span class="label shrink-0">Tag</span>
+                <select id="tagFilter" aria-label="Filter by tag">
                     <option value="">All</option>
                 </select>
             </div>
-            <div id="customRangeContainer"
-                class="flex items-center gap-3 h-[42px] bg-n8n-card border border-line rounded-lg px-4 py-2 w-full sm:w-auto hover:border-line-2 transition-all duration-300">
-                <span class="text-[10px] text-ink-3 font-bold uppercase tracking-widest mb-0">Custom</span>
-                <div class="flex items-center gap-2">
-                    <input type="date" id="insightsRangeStart"
-                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
-                    <span class="text-ink-3">—</span>
-                    <input type="date" id="insightsRangeEnd"
-                        class="bg-transparent border-none text-xs text-n8n-text font-semibold focus:outline-none cursor-pointer w-28">
-                </div>
+
+            <div id="customRangeContainer" class="field">
+                <span class="label shrink-0">Custom</span>
+                <input type="date" id="insightsRangeStart" aria-label="Range start">
+                <span class="field-sep" aria-hidden="true">—</span>
+                <input type="date" id="insightsRangeEnd" aria-label="Range end">
             </div>
         </div>
 
@@ -308,7 +318,7 @@
                     <h3 class="text-sm font-semibold text-ink-2">Not running</h3>
                     <span id="silenceAsOf" class="text-[10px] text-ink-3 uppercase tracking-widest"></span>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -375,7 +385,7 @@
                 <div class="p-4 border-b border-line bg-black/20">
                     <h3 class="text-sm font-semibold text-ink-2">Retry concentration</h3>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -407,7 +417,7 @@
                     <div class="p-4 border-b border-line bg-black/20">
                         <h3 class="text-sm font-semibold text-ink-2">Folders</h3>
                     </div>
-                    <div class="overflow-x-auto">
+                    <div class="scroll-x">
                         <table class="w-full text-left">
                             <thead class="bg-black/40">
                                 <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -428,7 +438,7 @@
                     <div class="p-4 border-b border-line bg-black/20">
                         <h3 class="text-sm font-semibold text-ink-2">Tags</h3>
                     </div>
-                    <div class="overflow-x-auto">
+                    <div class="scroll-x">
                         <table class="w-full text-left">
                             <thead class="bg-black/40">
                                 <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -463,7 +473,7 @@
                     <h3 class="text-sm font-semibold text-ink-2">Credentials, by how much depends on them</h3>
                     <span class="text-[10px] text-ink-3 uppercase tracking-widest">names and types only &mdash; never the secret</span>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -506,7 +516,7 @@
             <p id="deployCoverage" class="hidden text-[11px] text-ink-2 bg-black/25 border border-line rounded-lg px-3 py-2 mb-4"></p>
 
             <div class="card card-clip">
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -595,7 +605,7 @@
                     <h3 class="text-sm font-semibold text-ink-2">Where the bytes come from</h3>
                     <span class="text-[10px] text-ink-3 uppercase tracking-widest">Highlighted above 1 MB per run</span>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -636,7 +646,7 @@
                         <p class="text-[10px] text-ink-3 mt-1">How concentrated the cost is &mdash; one
                             expensive node is somewhere to start, eight even ones are not.</p>
                     </div>
-                    <div class="overflow-x-auto">
+                    <div class="scroll-x">
                         <table class="w-full text-left">
                             <thead class="bg-black/40">
                                 <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -659,7 +669,7 @@
                         <p class="text-[10px] text-ink-3 mt-1">Averaged over the executions each node
                             actually appeared in.</p>
                     </div>
-                    <div class="overflow-x-auto">
+                    <div class="scroll-x">
                         <table class="w-full text-left">
                             <thead class="bg-black/40">
                                 <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -684,7 +694,7 @@
                         takes 376 items and emits 5 is usually a rollup doing its job &mdash; what is worth
                         chasing is a ratio that <em>changed</em>.</p>
                 </div>
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">
@@ -710,7 +720,7 @@
                 <p class="text-[11px] text-ink-3">What the workflows themselves record about their runs.</p>
             </div>
             <div class="card card-clip">
-                <div class="overflow-x-auto">
+                <div class="scroll-x">
                     <table class="w-full text-left">
                         <thead class="bg-black/40">
                             <tr class="text-ink-3 text-[10px] uppercase tracking-wider font-bold">

@@ -13,7 +13,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
-const { parseIsoDate, parseDateRange, parseExecutionMode, validateSetting, validateRoiEntry } =
+const { parseIsoDate, parseDateRange, parseExecutionMode, validateSetting, validateApiKey,
+    validateRoiEntry } =
     require(path.join(ROOT, 'src/utils/validate'));
 
 // ---------------------------------------------------------------- parseIsoDate
@@ -70,6 +71,37 @@ test('validateSetting checks the timezone against Intl, not a list', () => {
     assert.equal(validateSetting('timezone', 'UTC').ok, true);
     assert.equal(validateSetting('timezone', 'Mars/Olympus_Mons').ok, false);
     assert.equal(validateSetting('timezone', '').ok, false);
+});
+
+test('the model is checked for shape, deliberately not for membership', () => {
+    // No allowlist of known models, and that is the decision rather than an
+    // omission: providers ship faster than this dashboard does, and a list would
+    // make the newest model unreachable until somebody edited a file and
+    // redeployed — the exact barrier moving the setting out of the environment
+    // removes. So the check only stops the field being used as free storage.
+    assert.equal(validateSetting('ai_model', 'gpt-5.4-mini').ok, true);
+    assert.equal(validateSetting('ai_model', 'some-model-released-next-year').ok, true);
+    assert.equal(validateSetting('ai_model', '').ok, true, 'empty clears it');
+    assert.equal(validateSetting('ai_model', 'a model with spaces').ok, false);
+    assert.equal(validateSetting('ai_model', 'x'.repeat(65)).ok, false);
+});
+
+// --------------------------------------------------------------- validateApiKey
+test('an API key is checked for shape only, because only the provider knows', () => {
+    // A regex insisting on `sk-` today is a regex rejecting a valid key the day
+    // the prefix changes, and the verification anyone actually trusts is the
+    // next answer working. So: something was typed, and it is not absurd.
+    assert.equal(validateApiKey(`sk-proj-${'a'.repeat(40)}`).ok, true);
+    assert.equal(validateApiKey('short').ok, false);
+    assert.equal(validateApiKey(undefined).ok, false);
+
+    const pasted = validateApiKey(`sk-proj-${'a'.repeat(40)} `);
+    assert.equal(pasted.ok, true, 'a trailing newline from a copy-paste is trimmed, not refused');
+    assert.ok(!/\s/.test(pasted.value));
+
+    const broken = validateApiKey(`sk-proj-${'a'.repeat(20)} ${'b'.repeat(20)}`);
+    assert.equal(broken.ok, false);
+    assert.match(broken.error, /copy-paste/, 'and says what probably went wrong');
 });
 
 // ------------------------------------------------------------- validateRoiEntry
@@ -993,16 +1025,36 @@ function withStubbedModel(replies) {
             completions: {
                 create: async (args) => {
                     calls.push(args);
-                    const reply = replies[calls.length - 1];
-                    if (reply && reply.throws) throw new Error(reply.throws);
-                    if (args.stream) {
-                        return (async function* () {
-                            for (const piece of reply.chunks) {
-                                yield { choices: [{ delta: { content: piece } }] };
+                    const reply = replies[calls.length - 1] || { chunks: [''] };
+                    if (reply.throws) throw new Error(reply.throws);
+
+                    // The runner streams every call, so the stub does too — and
+                    // it fragments tool calls the way the real API does: the
+                    // name in one chunk, the arguments across several, keyed by
+                    // index. Handing them over whole would have let a
+                    // reassembly bug pass.
+                    return (async function* () {
+                        if (reply.toolCalls) {
+                            for (let i = 0; i < reply.toolCalls.length; i++) {
+                                const t = reply.toolCalls[i];
+                                yield { choices: [{ delta: { tool_calls: [{
+                                    index: i, id: `call_${i}`, type: 'function',
+                                    function: { name: t.name, arguments: '' }
+                                }] } }] };
+                                const json = JSON.stringify(t.args || {});
+                                for (let c = 0; c < json.length; c += 7) {
+                                    yield { choices: [{ delta: { tool_calls: [{
+                                        index: i,
+                                        function: { arguments: json.slice(c, c + 7) }
+                                    }] } }] };
+                                }
                             }
-                        })();
-                    }
-                    return { choices: [{ message: { content: reply.content } }] };
+                            return;
+                        }
+                        for (const piece of reply.chunks || [reply.content || '']) {
+                            yield { choices: [{ delta: { content: piece } }] };
+                        }
+                    })();
                 }
             }
         }
@@ -1022,6 +1074,16 @@ function withStubbedModel(replies) {
         delete require.cache[controllerPath];
     } };
 }
+
+/**
+ * The calls that were steps of the tool loop, as opposed to the housekeeping.
+ *
+ * A turn spends one extra model call naming its conversation, on the opening
+ * exchange only — see src/ai/title.js. It is not a step and must not be counted
+ * as one, and it is distinguishable without a flag: every call the runner makes
+ * carries the tool list, and nothing else does.
+ */
+const toolLoopCalls = (calls) => calls.filter((c) => Array.isArray(c.tools));
 
 /** A minimal res that records the SSE frames written to it. */
 function recordingRes() {
@@ -1053,6 +1115,30 @@ function recordingRes() {
     };
 }
 
+/** Polls a condition rather than guessing at a delay. */
+async function waitFor(condition, what, timeoutMs = 8000) {
+    const started = Date.now();
+    while (!condition()) {
+        if (Date.now() - started > timeoutMs) throw new Error(`timed out waiting for ${what}`);
+        await new Promise((r) => { setTimeout(r, 5); });
+    }
+}
+
+/**
+ * Runs a streamed turn to its end.
+ *
+ * `chatStream` returns as soon as the work is handed to the turn registry —
+ * that separation is the feature, since it is what lets an answer survive the
+ * reader navigating away — so a test that awaited only the controller would be
+ * asserting against a stream containing nothing but the turn id.
+ */
+async function runStream(controller, req, res) {
+    await controller.chatStream(req, res);
+    if (res.statusCode >= 400) return res;          // refused before any stream
+    await waitFor(() => res.ended, 'the stream to close');
+    return res;
+}
+
 // dashboard_chat_history.user_id is a foreign key into users, so the fake
 // callers below have to exist before anything can be persisted for them.
 // Without this the pipeline runs correctly and then fails on the final INSERT,
@@ -1073,13 +1159,18 @@ const streamReq = (message, extra = {}) => ({
     ...extra
 });
 
-test('the streamed answer sends its SQL before the prose', async () => {
+test('the stream narrates its steps before the prose', async () => {
+    // What is announced first changed with the pipeline. It used to be the
+    // generated SQL, because the SQL was the reasoning. The assistant no longer
+    // writes queries — it chooses among the dashboard's own analyses — so the
+    // thing worth showing, and worth showing FIRST, is which ones it chose.
     const { controller, restore } = withStubbedModel([
-        { content: 'SELECT COUNT(*) AS n FROM workflow_entity' },
+        { toolCalls: [{ name: 'search_catalog', args: { query: 'call center' } }] },
+        { toolCalls: [{ name: 'get_analytics', args: { metric: 'kpis' } }] },
         { chunks: ['There ', 'are ', 'some ', 'workflows.'] }
     ]);
     const res = recordingRes();
-    await controller.chatStream(streamReq('how many workflows?'), res);
+    await runStream(controller, streamReq('how is call center doing?'), res);
     restore();
 
     const events = res.events;
@@ -1090,80 +1181,142 @@ test('the streamed answer sends its SQL before the prose', async () => {
     // one delayed blob — the header that disables it is part of the contract.
     assert.equal(res.headers['X-Accel-Buffering'], 'no');
 
-    assert.equal(names[0], 'sql', 'the query is the first thing the client learns');
-    assert.ok(names.indexOf('sql') < names.indexOf('delta'), 'and it precedes the answer');
+    // Two frames of prelude before any work is reported, and both are addresses
+    // rather than content: the turn id is how a client that has navigated
+    // somewhere else finds this same answer, and the conversation id is which
+    // thread to draw it into when it gets there.
+    assert.deepEqual(names.slice(0, 2), ['turn', 'conversation']);
+    assert.ok(events[0].data.id, 'the turn carries an id to reattach with');
+    assert.ok(events[1].data.id, 'and the conversation says which thread this is');
+    assert.equal(names[2], 'step', 'then what is being looked up');
+    assert.ok(names.indexOf('step') < names.indexOf('delta'), 'which precedes the answer');
     assert.equal(names[names.length - 1], 'done');
 
-    assert.match(events[0].data.sql, /^SELECT/);
+    const steps = events.filter((e) => e.event === 'step');
+    assert.equal(steps.length, 2);
+    assert.equal(steps[0].data.tool, 'search_catalog');
+    // The label is what a reader sees, so it is in their vocabulary and not the
+    // tool's.
+    assert.match(steps[0].data.label, /Looking up call center/);
+    assert.equal(steps[1].data.tool, 'get_analytics');
+
     const answer = events.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
     assert.equal(answer, 'There are some workflows.');
-    assert.equal(events[events.length - 1].data.answer, 'There are some workflows.');
+
+    const done = events[events.length - 1].data;
+    assert.equal(done.answer, 'There are some workflows.');
+    assert.equal(done.steps.length, 2, 'the final frame carries the real arguments');
+    assert.equal(done.steps[0].args.query, 'call center');
     assert.ok(res.ended);
 });
 
-test('a stream refuses non-SELECT SQL as an event, not as a status', async () => {
-    // The headers are already out by the time the guard can fire on a stream,
-    // so a 400 is no longer available. An error that arrived as a silent
-    // disconnection would leave the widget spinning forever.
+test('a refused query comes back as a failed step, not as a dead stream', async () => {
+    // The guard used to end the turn: the model wrote the SQL, the SQL was
+    // rejected, the request was over. Now the query is one tool among several,
+    // so a refusal is something the model can be told about and work around —
+    // and the user still gets an answer.
     const { controller, restore } = withStubbedModel([
-        { content: 'DROP TABLE workflow_entity' }
+        { toolCalls: [{ name: 'run_sql', args: { sql: 'DROP TABLE workflow_entity', purpose: 'x' } }] },
+        { chunks: ['I could not run that.'] }
     ]);
     const res = recordingRes();
-    await controller.chatStream(streamReq('delete everything'), res);
+    await runStream(controller, streamReq('delete everything'), res);
     restore();
 
     const events = res.events;
-    assert.equal(events.length, 1);
-    assert.equal(events[0].event, 'error');
-    assert.match(events[0].data.details, /SELECT/);
-    assert.equal(events[0].data.sqlUsed, 'DROP TABLE workflow_entity');
+    const steps = events.filter((e) => e.event === 'step');
+    assert.equal(steps.length, 1);
+    assert.equal(steps[0].data.tool, 'run_sql');
+    assert.equal(steps[0].data.ok, false, 'the refusal is visible as a failed step');
+
+    // The stream survived it.
+    assert.equal(events[events.length - 1].event, 'done');
+    assert.equal(events[events.length - 1].data.answer, 'I could not run that.');
     assert.ok(res.ended);
 });
 
-test('a stream refuses DML hidden inside a CTE', async () => {
+test('DML hidden inside a CTE is refused by the query tool', async () => {
     const { controller, restore } = withStubbedModel([
-        { content: 'WITH x AS (DELETE FROM execution_entity RETURNING 1) SELECT * FROM x' }
+        { toolCalls: [{ name: 'run_sql', args: {
+            sql: 'WITH x AS (DELETE FROM execution_entity RETURNING 1) SELECT * FROM x',
+            purpose: 'clean up'
+        } }] },
+        { chunks: ['No.'] }
     ]);
     const res = recordingRes();
-    await controller.chatStream(streamReq('clean up'), res);
+    await runStream(controller, streamReq('clean up'), res);
     restore();
-    assert.equal(res.events[0].event, 'error');
-    assert.match(res.events[0].data.details, /Destructive/);
+
+    const step = res.events.find((e) => e.event === 'step');
+    assert.equal(step.data.ok, false);
+    assert.equal(res.events[res.events.length - 1].event, 'done');
 });
 
-test('a scoped user is refused before any stream is opened', async () => {
-    // Still a real HTTP status, because nothing has been written yet — and it
-    // has to be, or the browser cannot tell a refusal from an empty answer.
-    const { controller, restore } = withStubbedModel([]);
+test('a scoped user now gets an answer, restricted to what they can see', async () => {
+    // The inverse of the test this replaces. The assistant used to answer 403 to
+    // every project member, because free-form SQL could not be narrowed — a
+    // subquery or a UNION steps around an appended filter. It no longer writes
+    // that SQL: every tool takes the caller's scope, and the read-only views
+    // carry it inside the relation. So the refusal is gone, which was the point
+    // of H-06 step 6.
+    const { controller, restore } = withStubbedModel([
+        { toolCalls: [{ name: 'get_analytics', args: { metric: 'workflows' } }] },
+        { chunks: ['You have no workflows.'] }
+    ]);
     const res = recordingRes();
-    await controller.chatStream(
-        streamReq('anything', { scope: { unrestricted: false } }), res);
+    await runStream(controller, 
+        streamReq('what do I have?', {
+            scope: { unrestricted: false, userId: 'u-stream-test' }
+        }), res);
     restore();
-    assert.equal(res.statusCode, 403);
-    assert.equal(res.headers, null, 'no stream headers were written');
-    assert.match(res.jsonBody.error, /owners and admins/);
+
+    assert.notEqual(res.statusCode, 403, 'a project member is no longer refused outright');
+    assert.equal(res.headers['Content-Type'], 'text/event-stream; charset=utf-8');
+    assert.equal(res.events[res.events.length - 1].event, 'done');
+    assert.equal(res.events[res.events.length - 1].data.answer, 'You have no workflows.');
 });
 
 test('an over-long message is refused before any stream is opened', async () => {
     const { controller, restore } = withStubbedModel([]);
     const res = recordingRes();
-    await controller.chatStream(streamReq('x'.repeat(2001)), res);
+    await runStream(controller, streamReq('x'.repeat(2001)), res);
     restore();
     assert.equal(res.statusCode, 400);
     assert.equal(res.headers, null);
 });
 
-test('a client that disconnects mid-answer writes nothing to the history', async () => {
-    // A half-sentence in the history is worse than no record: the next turn
-    // feeds it back to the model as something it supposedly said.
-    const { controller, restore } = withStubbedModel([
-        { content: 'SELECT 1' },
-        { chunks: ['half a sen', 'tence'] }
-    ]);
+// ============================================ turns that outlive the request
+//
+// This block replaces a test that asserted the opposite, and the reversal is
+// deliberate rather than a regression. The old rule was "a client that
+// disconnects mid-answer writes nothing to the history", and it was right while
+// a disconnection could only mean the reader had given up.
+//
+// It cannot mean only that any more. The assistant is a panel on every page of a
+// multi-page app, so the ordinary gesture — ask, then go and look at the page the
+// answer is about — is a disconnection, and it was destroying the answer and the
+// tokens that paid for it. The run belongs to the turn registry now; a lost
+// client is a detached subscriber.
+//
+// What survives from the old rule is the part that was really about half
+// sentences: a CANCELLED turn still writes nothing.
 
+const aiTurns = require(path.join(ROOT, 'src/ai/turns'));
+
+/** Reads a body's worth of history for one user. */
+async function historyCount(userId) {
     const localDb = require(path.join(ROOT, 'src/config/localDb'));
-    const before = await localDb.query(
-        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ?', ['u-abort-test']);
+    const r = await localDb.query(
+        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ?', [userId]);
+    return r.rows[0].n;
+}
+
+test('a reader who navigates away still gets their answer', async () => {
+    const { controller, restore } = withStubbedModel([
+        { toolCalls: [{ name: 'describe_instance', args: {} }] },
+        { chunks: ['The answer ', 'finished anyway.'] }
+    ]);
+    const before = await historyCount('u-abort-test');
 
     let fireClose = null;
     const res = recordingRes();
@@ -1172,19 +1325,731 @@ test('a client that disconnects mid-answer writes nothing to the history', async
         on(evt, fn) { if (evt === 'close') fireClose = fn; }
     });
 
-    const done = controller.chatStream(req, res);
-    // The controller registers its close handler synchronously, before the
-    // first await resolves.
-    await new Promise((r) => { setImmediate(r); });
-    if (fireClose) fireClose();
-    await done;
+    await controller.chatStream(req, res);
+    const turnId = res.events[0].data.id;
+    assert.ok(turnId, 'the client is told the id before anything else');
+
+    // The reader clicks a link. In an MPA that is a full document load, and the
+    // socket goes with it.
+    fireClose();
+
+    await waitFor(() => aiTurns._internal.turns.get(turnId)?.status === 'done',
+        'the orphaned turn to finish');
     restore();
 
-    const after = await localDb.query(
-        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ?', ['u-abort-test']);
-    assert.equal(after.rows[0].n, before.rows[0].n,
-        'an aborted stream must not persist a partial answer');
-    assert.ok(!res.events.some((e) => e.event === 'done'), 'and must not claim it finished');
+    const turn = aiTurns._internal.turns.get(turnId);
+    assert.equal(turn.state.answer, 'The answer finished anyway.',
+        'the model kept writing with nobody watching');
+    assert.equal(await historyCount('u-abort-test'), before + 2,
+        'and the question and the answer are both in the history');
+});
+
+test('the next page attaches to the same turn and picks the answer up', async () => {
+    const { controller, restore } = withStubbedModel([{ chunks: ['Carried across.'] }]);
+
+    const first = recordingRes();
+    await runStream(controller, streamReq('a question', { user: { id: 'u-abort-test' } }), first);
+    const turnId = first.events[0].data.id;
+    restore();
+
+    // A fresh document, a fresh request, the same turn.
+    const second = recordingRes();
+    await controller.attachTurn(
+        { params: { id: turnId }, user: { id: 'u-abort-test' }, on() {} }, second);
+
+    const events = second.events;
+    assert.equal(events[0].event, 'turn');
+    // Replayed as ONE delta rather than as the fragments it arrived in: holding
+    // every frame so a late client can be told the same string a few characters
+    // at a time is memory spent for no difference on screen.
+    const delta = events.find((e) => e.event === 'delta');
+    assert.equal(delta.data.text, 'Carried across.');
+    assert.equal(events[events.length - 1].event, 'done');
+    assert.ok(second.ended, 'a finished turn closes the reattached stream immediately');
+});
+
+test('a turn belonging to somebody else is absent, not forbidden', async () => {
+    // "Forbidden" confirms it exists. A turn id streams a private conversation.
+    const { controller, restore } = withStubbedModel([{ chunks: ['Mine.'] }]);
+    const res = recordingRes();
+    await runStream(controller, streamReq('mine', { user: { id: 'u-abort-test' } }), res);
+    const turnId = res.events[0].data.id;
+    restore();
+
+    const stolen = recordingRes();
+    await controller.attachTurn(
+        { params: { id: turnId }, user: { id: 'u-stream-test' }, on() {} }, stolen);
+    assert.equal(stolen.statusCode, 404);
+});
+
+test('a cancelled turn still writes nothing to the history', async () => {
+    // The half-sentence rule, applied to the case it was always about. A reader
+    // who presses stop does not want the answer; one who navigates does.
+    const { controller, restore } = withStubbedModel([
+        { toolCalls: [{ name: 'describe_instance', args: {} }] },
+        { chunks: ['half a sen', 'tence'] }
+    ]);
+    const before = await historyCount('u-abort-test');
+
+    const res = recordingRes();
+    const req = streamReq('a question', { user: { id: 'u-abort-test' } });
+    await controller.chatStream(req, res);
+    const turnId = res.events[0].data.id;
+
+    const cancelRes = recordingRes();
+    await controller.cancelTurn(
+        { params: { id: turnId }, user: { id: 'u-abort-test' } }, cancelRes);
+    assert.equal(cancelRes.jsonBody.cancelled, true);
+
+    await waitFor(() => res.ended, 'the cancelled stream to close');
+    restore();
+
+    assert.equal(res.events[res.events.length - 1].event, 'cancelled',
+        'the client is told it stopped rather than being left to guess');
+    assert.equal(await historyCount('u-abort-test'), before,
+        'a cancelled answer is not a record of anything');
+});
+
+// ============================================================== @tags · H-06 §4
+//
+// Two gestures under one symbol, and they fail in different directions:
+//
+//   @tool:docs      must actually COMPEL the call. The reason this is not a
+//                   sentence in the prompt is that a sentence in the prompt is
+//                   what the model already ignored.
+//   @workflow:X     must be re-resolved server-side. The id the client sends is
+//                   never the id that is used, because a hand-written request
+//                   would otherwise pin the answer to another project's work.
+//
+// The parser is tested against the things that merely LOOK like tags, because
+// an email address in a question must not become one.
+
+const aiTags = require(path.join(ROOT, 'src/ai/tags'));
+const aiToolsFor = (opts) => require(path.join(ROOT, 'src/ai/tools')).build(opts);
+
+test('a tag is recognised by its category, so an address is not one', () => {
+    const found = aiTags.parse(
+        'mail me at ops@acme.com about @workflow:Billing and @nonsense:x — @tool:docs please'
+    );
+    assert.deepEqual(
+        found.map((t) => `${t.category}:${t.value}`),
+        ['workflow:Billing', 'tool:docs'],
+        'an unknown category is not a tag, and neither is host:port or an address'
+    );
+});
+
+test('quotes are what let a workflow name have spaces in it', () => {
+    // Bare values stop at whitespace, so without this `@workflow:Call Center`
+    // would silently mean the workflow "Call".
+    const [quoted] = aiTags.parse('how is @workflow:"Call Center Per Minute" doing?');
+    assert.equal(quoted.value, 'Call Center Per Minute');
+    const [bare] = aiTags.parse('how is @workflow:CallCenter doing?');
+    assert.equal(bare.value, 'CallCenter');
+});
+
+test('the same tag written twice is one tag', () => {
+    const found = aiTags.parse('@workflow:Billing vs @Workflow:billing');
+    assert.equal(found.length, 1, 'case and repetition do not multiply the work');
+});
+
+test('a tool tag for a tool that is not on the list is refused, not forced', async () => {
+    // The failure this prevents is a `tool_choice` naming a function the model
+    // was never given — which is a provider error mid-turn, in front of the
+    // user, for a tag they were allowed to type.
+    const tools = aiToolsFor({ sqlEnabled: true, docsEnabled: false });
+    const ctx = { scope: null, visibleIds: null, userId: 'u-tag-test' };
+
+    const out = await aiTags.resolve(aiTags.parse('@tool:docs @tool:sql why?'), { ctx, tools });
+
+    assert.deepEqual(out.forced, ['run_sql'], 'only what is actually available is compelled');
+    assert.equal(out.rejected.length, 1);
+    assert.equal(out.rejected[0].raw, '@tool:docs');
+    assert.match(out.preamble, /not available in this conversation/);
+});
+
+test('a name that resolves to nothing is reported rather than quietly dropped', async () => {
+    // Dropping it would produce an answer about the instance as a whole that
+    // reads exactly like an answer about the thing that was tagged.
+    const tools = aiToolsFor({ sqlEnabled: true, docsEnabled: false });
+    const ctx = { scope: null, visibleIds: null, userId: 'u-tag-test' };
+
+    const out = await aiTags.resolve(
+        aiTags.parse('what happened to @workflow:"ZzNoSuchWorkflowZz"?'), { ctx, tools }
+    );
+
+    assert.equal(out.resolved.length, 0);
+    assert.equal(out.rejected.length, 1);
+    assert.match(out.rejected[0].why, /no workflow you can see/);
+    assert.match(out.preamble, /Say so plainly/);
+});
+
+test('a tag is resolved against the caller\'s scope, not against the instance', async (t) => {
+    // The rule the whole feature rests on. Same tag, same text, two callers:
+    // the one who can see the workflow resolves it, the one who cannot is
+    // refused — and nothing about the request itself differs.
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+    // A name that belongs to exactly one workflow. Duplicates are ordinary here
+    // — an archived copy beside the live one — and they are the subject of the
+    // next test rather than a complication in this one.
+    const [any] = await ro.query(
+        `SELECT MIN(id) AS id, name FROM ai_workflows
+          GROUP BY lower(name) HAVING COUNT(*) = 1 LIMIT 1`, [], { scope: null });
+    if (!any) return t.skip('the replica holds no uniquely named workflow to tag');
+
+    const tools = aiToolsFor({ sqlEnabled: true, docsEnabled: false });
+    const byName = aiTags.parse(`about @workflow:"${any.name.replace(/"/g, '')}"`);
+    const byId = aiTags.parse(`about @workflow:${any.id}`);
+    const asUser = (visibleIds) => ({
+        ctx: { scope: null, visibleIds, userId: 'u-tag-test' }, tools
+    });
+
+    const unrestricted = await aiTags.resolve(byName, asUser(null));
+    assert.equal(unrestricted.resolved.length, 1, 'the owner resolves it');
+    assert.equal(unrestricted.resolved[0].entry.id, any.id, 'and the id comes from the catalogue');
+
+    // What the dropdown actually inserts, since names are not unique.
+    const idForm = await aiTags.resolve(byId, asUser(null));
+    assert.equal(idForm.resolved.length, 1, 'an id resolves through the same path as a name');
+    assert.equal(idForm.resolved[0].entry.name, any.name);
+
+    // An empty visible set is a real caller: a user who belongs to no project.
+    // The id is spelled correctly and still buys nothing, which is the point —
+    // it is re-resolved rather than believed.
+    for (const tagged of [byName, byId]) {
+        const scoped = await aiTags.resolve(tagged, asUser([]));
+        assert.equal(scoped.resolved.length, 0, 'a caller who cannot see it does not');
+        assert.equal(scoped.rejected.length, 1);
+    }
+});
+
+test('a name two workflows share is refused with both ids, not guessed between', async (t) => {
+    // Found in the real replica: "Saved Messages v2" is an archived workflow AND
+    // a live one. Answering about either without saying so is a wrong answer
+    // that reads exactly like a right one.
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+    const [dupe] = await ro.query(
+        `SELECT name, COUNT(*) AS n FROM ai_workflows
+          GROUP BY lower(name) HAVING n > 1 LIMIT 1`, [], { scope: null });
+    if (!dupe) return t.skip('no duplicated workflow name in the replica');
+
+    const out = await aiTags.resolve(
+        aiTags.parse(`about @workflow:"${dupe.name.replace(/"/g, '')}"`),
+        { ctx: { scope: null, visibleIds: null, userId: 'u-tag-test' },
+            tools: aiToolsFor({ sqlEnabled: true, docsEnabled: false }) }
+    );
+
+    assert.equal(out.resolved.length, 0);
+    assert.match(out.rejected[0].why, /tag one by id instead/,
+        'the way out is named, because the user can act on it');
+});
+
+test('the resolved tags arrive as their own system turn, and are never persisted', async () => {
+    const { controller, calls, restore } = withStubbedModel([{ chunks: ['Nothing to report.'] }]);
+    const res = recordingRes();
+    await runStream(controller, streamReq('what about @workflow:"ZzNoSuchWorkflowZz"?'), res);
+    restore();
+
+    const msgs = calls[0].messages;
+    const at = msgs.findIndex(
+        (m) => m.role === 'system' && String(m.content).includes('Tags in this question')
+    );
+    assert.ok(at > 0, 'the preamble is a system turn, not a prefix on the question');
+    assert.equal(msgs[at + 1].role, 'user', 'and it sits immediately before the question');
+
+    // The client learns what stuck before the first step runs, because the chips
+    // are already on screen.
+    const tagEvent = res.events.find((e) => e.event === 'tags');
+    assert.ok(tagEvent, 'the stream says what happened to the tags');
+    assert.equal(tagEvent.data.rejected.length, 1);
+    const names = res.events.map((e) => e.event);
+    assert.ok(names.indexOf('tags') < (names.indexOf('step') + 1 || Infinity),
+        'and says it before the first step');
+    assert.ok(names.indexOf('tags') < names.indexOf('delta'), 'and before the answer');
+
+    // Replaying resolved ids into a later, unrelated question is how a tag leaks
+    // forward into a turn nobody tagged.
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    const rows = await localDb.query(
+        "SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ? AND content LIKE '%Tags in this question%'",
+        ['u-stream-test']);
+    assert.equal(rows.rows[0].n, 0);
+});
+
+test('a tool tag becomes tool_choice on the first step, then lets go', async () => {
+    const { controller, calls, restore } = withStubbedModel([
+        { toolCalls: [{ name: 'describe_instance', args: {} }] },
+        { chunks: ['That is what I cover.'] }
+    ]);
+    const res = recordingRes();
+    await runStream(controller, streamReq('@tool:instance what do you cover?'), res);
+    restore();
+
+    const steps = toolLoopCalls(calls);
+    assert.deepEqual(steps[0].tool_choice, { type: 'function', function: { name: 'describe_instance' } },
+        'the tag compels the call rather than suggesting it');
+    assert.equal(steps[1].tool_choice, 'auto', 'and the demand is spent once it is met');
+    assert.equal(steps.length, 2);
+});
+
+test('a provider that ignores tool_choice does not cost the user their answer', async () => {
+    // And in particular does not show them two openings: prose from a compelled
+    // step is not forwarded, so dropping the demand and asking again cannot
+    // stream a first sentence that the real answer then contradicts.
+    const { controller, calls, restore } = withStubbedModel([
+        { chunks: ['I would rather ', 'not.'] },
+        { chunks: ['Real answer.'] }
+    ]);
+    const res = recordingRes();
+    await runStream(controller, streamReq('@tool:instance what do you cover?'), res);
+    restore();
+
+    const streamed = res.events.filter((e) => e.event === 'delta').map((e) => e.data.text).join('');
+    assert.equal(streamed, 'Real answer.', 'the refused step is not shown to the reader');
+    assert.equal(toolLoopCalls(calls).length, 2, 'and the turn continues instead of insisting');
+});
+
+test('an untagged message costs nothing', async () => {
+    // Resolution reads the one serialised read-only connection. If it ran for
+    // every message it would rebuild the catalogue index in front of questions
+    // that never named anything.
+    const out = await aiTags.resolve(aiTags.parse('how many executions failed yesterday?'), {
+        ctx: { scope: null, visibleIds: null, userId: 'u-tag-test' },
+        tools: aiToolsFor({ sqlEnabled: true, docsEnabled: false })
+    });
+    assert.equal(out.preamble, null);
+    assert.deepEqual(out.forced, []);
+});
+
+// ================================================ conversations and memory
+//
+// The chat was one endless thread per user, and the model's context was "your
+// last ten messages" whatever they were about. Two things replace that, and they
+// answer different questions:
+//
+//   a conversation   scopes the transcript. Monday's queue-lag table stops
+//                    arriving attached to Thursday's question about errors.
+//   a memory         crosses conversations on purpose, because starting a new
+//                    thread should not mean re-explaining who you are.
+//
+// What the model reads of a thread is the thread itself now, not a recent window
+// plus a model-written summary of everything before it. The part worth testing
+// hardest moved with that: it is no longer the seam between quoted and folded,
+// it is that the budget cuts at a whole exchange and SAYS it cut, and that the
+// tool lines beside each answer stay outside the answer.
+
+const convos = require(path.join(ROOT, 'src/dao/conversationsDao'));
+const aiHistory = require(path.join(ROOT, 'src/ai/history'));
+
+const CONVO_USER = 'u-convo-test';
+
+test('seed the user the conversation tests write for', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    await localDb.execute('INSERT OR IGNORE INTO users (id, email) VALUES (?, ?)',
+        [CONVO_USER, `${CONVO_USER}@test.local`]);
+});
+
+test('a conversation id from somebody else starts a new thread, not theirs', async () => {
+    // A conversation id names a private transcript. The check is the same one
+    // tags get: an id is re-resolved against the caller, never taken at its
+    // word — and a foreign one reads as absent rather than as forbidden.
+    const mine = await convos.create(CONVO_USER);
+    const resolved = await convos.resolveFor('u-stream-test', mine.id);
+    assert.notEqual(resolved.id, mine.id, 'somebody else\'s thread is not resumed');
+
+    // And no id at all starts a new one rather than picking up the last —
+    // resuming whatever you last talked about is the behaviour threads exist to
+    // remove.
+    const fresh = await convos.resolveFor(CONVO_USER, null);
+    assert.notEqual(fresh.id, mine.id);
+
+    await convos.remove(mine.id, CONVO_USER);
+    await convos.remove(fresh.id, CONVO_USER);
+    await convos.remove(resolved.id, 'u-stream-test');
+});
+
+test('a whole thread reaches the model, with the analyses beside each answer', async () => {
+    const c = await convos.create(CONVO_USER, 'thread');
+    for (let i = 1; i <= 30; i++) {
+        await convos.addMessage({
+            conversationId: c.id, userId: CONVO_USER,
+            role: i % 2 ? 'user' : 'ai',
+            content: `message ${i}`,
+            steps: i % 2 ? null : `get_analytics: kpis · workflow WF${i}`
+        });
+    }
+
+    const loaded = await convos.history(c.id);
+    assert.equal(loaded.messages.length, 30, 'nothing is dropped while it fits the budget');
+    assert.equal(loaded.truncated, 0);
+    assert.equal(loaded.messages[0].content, 'message 1', 'oldest first');
+
+    // The column is `sql_used` and has been misnamed since the model stopped
+    // writing SQL. What matters is that it comes back AT ALL: it is the only
+    // record of which analysis produced which number, and the fold that used to
+    // stand here read role and content only.
+    assert.match(loaded.messages[1].steps, /workflow WF2/);
+
+    await convos.remove(c.id, CONVO_USER);
+});
+
+test('a thread too long for the budget is cut at a question, and says it was cut', async () => {
+    // Two failures in one test, because they are the same failure. A history cut
+    // silently is one the model answers from as though the conversation began
+    // there; a history cut mid-exchange leaves an answer with no question above
+    // it, which reads as something the assistant volunteered.
+    const c = await convos.create(CONVO_USER, 'long');
+    for (let i = 1; i <= 10; i++) {
+        await convos.addMessage({
+            conversationId: c.id, userId: CONVO_USER,
+            role: i % 2 ? 'user' : 'ai', content: 'x'.repeat(500)
+        });
+    }
+
+    const loaded = await convos.history(c.id, { chars: 1600 });
+    assert.ok(loaded.messages.length < 10, 'the budget bites');
+    assert.ok(loaded.truncated > 0, 'and the shortfall is reported rather than inferred');
+    assert.equal(loaded.messages[0].role, 'user', 'the oldest thing kept is a question');
+    assert.equal(
+        loaded.messages[loaded.messages.length - 1].content.length, 500,
+        'and the newest message is always kept'
+    );
+
+    // The note is not optional decoration: it is the only thing standing between
+    // a truncated thread and a model that describes it as the whole one.
+    const built = aiHistory.build(loaded);
+    assert.equal(built[0].role, 'system');
+    assert.match(built[0].content, /not shown/i);
+
+    await convos.remove(c.id, CONVO_USER);
+});
+
+test('the analyses behind an answer are a note about it, never part of it', async () => {
+    // The failure this prevents is specific and was the reason the steps were
+    // kept beside the message in the first place: a model reading its own turn
+    // treats every word of it as something it said out loud, so an answer
+    // ending in a tool line starts producing tool lines as prose, to the reader.
+    const built = aiHistory.build({
+        messages: [
+            { role: 'user', content: 'how is call center doing?' },
+            { role: 'ai', content: 'It ran 4,000 times.', steps: 'get_analytics: kpis · workflow WF1' }
+        ],
+        truncated: 0
+    });
+
+    assert.deepEqual(built.map((m) => m.role), ['user', 'assistant', 'system']);
+    assert.equal(built[1].content, 'It ran 4,000 times.', 'the answer is exactly what was said');
+    assert.match(built[2].content, /get_analytics: kpis · workflow WF1/);
+    // And the note has to tell the model what the ids are FOR, or it resolves
+    // the name again anyway, which is the wasted step this whole thing removes.
+    assert.match(built[2].content, /pass the id straight to the tool/i);
+
+    // A turn that called nothing adds nothing.
+    const bare = aiHistory.build({ messages: [{ role: 'ai', content: 'I cannot.' }], truncated: 0 });
+    assert.equal(bare.length, 1);
+});
+
+test('the ids a thread has measured are read from the same lines the transcript is', async () => {
+    // Two readers of one stored format is one of them drifting. The subject note
+    // and the transcript both parse `· workflow <id>`, so they parse it in one
+    // place — and newest first, because a thread that has moved on should point
+    // a pronoun at what it moved to.
+    const ids = aiHistory.workflowIds([
+        { steps: 'get_analytics: kpis · workflow OLD' },
+        { steps: 'get_analytics: errors · workflow NEW\ndrill_down: trace' }
+    ]);
+    assert.deepEqual(ids, ['NEW', 'OLD']);
+});
+
+test('a thread is named from its first question, without the tag syntax', async () => {
+    // Now the FALLBACK under the model-written title rather than the whole
+    // scheme — see src/ai/title.js. It is still tested, and tested first,
+    // because it is what stands between a provider timeout and a list of
+    // threads all called "Untitled".
+    assert.equal(
+        convos.titleFrom('why did @workflow:281VZtHUACXi9tPH fail last night?'),
+        'why did fail last night?'
+    );
+    assert.equal(convos.titleFrom('   '), 'New conversation');
+    assert.ok(convos.titleFrom('x'.repeat(200)).length <= 60);
+});
+
+test('a title the model writes is tidied, and never overwrites one a person chose', async () => {
+    const aiTitle = require(path.join(ROOT, 'src/ai/title'));
+
+    // What a model actually returns when told to reply with a title and nothing
+    // else. Each of these was a real shape: a label prefix, surrounding quotes,
+    // a trailing stop, and an explanation on the second line — which unhandled
+    // becomes a two-line entry in a one-line list.
+    assert.equal(aiTitle._internal.clean('"Call Center overnight failures."'),
+        'Call Center overnight failures');
+    assert.equal(aiTitle._internal.clean('Title: Queue lag on Monday'), 'Queue lag on Monday');
+    assert.equal(aiTitle._internal.clean('Queue lag\n\nThis names the thread about…'),
+        'Queue lag');
+    assert.ok(aiTitle._internal.clean('x'.repeat(200)).length <= aiTitle.MAX_TITLE_CHARS);
+
+    // A title passed to create() is one somebody chose — the eval harness names
+    // its scenarios and finds them again by that name — so it is settled from
+    // the start rather than replaced after the first answer.
+    const named = await convos.create(CONVO_USER, 'eval · S18 · a scenario');
+    assert.equal(await convos.setGeneratedTitle(named.id, CONVO_USER, 'Something else'), false);
+    assert.equal((await convos.find(named.id, CONVO_USER)).title, 'eval · S18 · a scenario');
+    await convos.remove(named.id, CONVO_USER);
+
+    // The flag, and the race it exists for: somebody renaming a thread while the
+    // answer is still streaming has decided, and the naming pass that lands a
+    // second later must not helpfully improve it back.
+    const c = await convos.create(CONVO_USER);
+    assert.equal(await convos.setGeneratedTitle(c.id, CONVO_USER, 'What the model chose'), true);
+    assert.equal((await convos.find(c.id, CONVO_USER)).title, 'What the model chose');
+    assert.equal(await convos.setGeneratedTitle(c.id, CONVO_USER, 'A second opinion'), false,
+        'the naming pass runs once and does not rename a thread as it goes');
+
+    await convos.rename(c.id, CONVO_USER, 'Mine');
+    assert.equal(await convos.setGeneratedTitle(c.id, CONVO_USER, 'The model again'), false);
+    assert.equal((await convos.find(c.id, CONVO_USER)).title, 'Mine');
+
+    await convos.remove(c.id, CONVO_USER);
+});
+
+test('a memory is kept once, capped, and removable by the person it is about', async () => {
+    await convos.forgetAll(CONVO_USER);
+
+    const first = await convos.remember(CONVO_USER, '  Reports on the Call Center folder. ');
+    assert.equal(first.ok, true);
+    assert.equal(first.content, 'Reports on the Call Center folder.', 'whitespace is normalised');
+
+    // The same thing said again is not a second memory — and it is not an error
+    // either, because from where the model is standing it succeeded.
+    const again = await convos.remember(CONVO_USER, 'reports on the CALL CENTER folder.');
+    assert.equal(again.ok, true);
+    assert.equal(again.duplicate, true);
+    assert.equal((await convos.memories(CONVO_USER)).length, 1);
+
+    // A refusal comes back as a reason rather than as a throw: the caller is a
+    // tool call, and the model can act on an explanation.
+    const tooLong = await convos.remember(CONVO_USER, 'x'.repeat(convos.MAX_MEMORY_CHARS + 1));
+    assert.equal(tooLong.ok, false);
+    assert.match(tooLong.reason, /under \d+ characters/);
+    assert.equal((await convos.remember(CONVO_USER, 'no')).ok, false, 'and too short is refused');
+
+    const [saved] = await convos.memories(CONVO_USER);
+    assert.equal(await convos.forget(CONVO_USER, saved.id), true);
+    assert.equal((await convos.memories(CONVO_USER)).length, 0);
+});
+
+test('memories reach the prompt as their own turn, ahead of the conversation', async () => {
+    const { memoryBlock, historyBlock } = require(path.join(ROOT, 'src/ai/prompt'));
+    assert.equal(memoryBlock([]), null, 'nothing remembered adds nothing to the prompt');
+
+    const block = memoryBlock([{ content: 'Wants absolute counts beside every rate.' }]);
+    assert.match(block, /Wants absolute counts beside every rate\./);
+    // The caveat is the point: people change their minds, and a note from March
+    // must not outrank what they are saying now.
+    assert.match(block, /what they say now wins/);
+
+    // The transcript is introduced before it starts, because the step notes in
+    // it are not something anybody said and an unlabelled note is one the model
+    // reads back to the reader as prose.
+    assert.match(historyBlock(), /never quote one/i);
+    assert.match(historyBlock(), /reuse it directly/i);
+});
+
+// ============================================================ the ROI calculator
+//
+// The one piece of real arithmetic on the ROI page, and the only browser-layer
+// module in this suite. It is an `.mjs` for exactly that reason: the browser
+// does not care about the extension when a module imports it, and Node will
+// load it as ESM from a CommonJS package, so one file serves both instead of
+// the logic being duplicated into something testable.
+//
+// What is being protected here is not the multiplication. It is that a
+// workflow with no recent executions gets a REFUSAL rather than a number.
+
+test('the calculator turns a manual job into a per-execution figure', async () => {
+    const { perExecutionSeconds } = await import(
+        `file://${path.join(ROOT, 'public/logic/roi/roi_math.mjs').replace(/\\/g, '/')}`
+    );
+
+    // A person did it 5 times a week, 30 minutes each. That is 30/7 × 5 ≈ 21.43
+    // manual runs a month, or 38,571 seconds of human work — spread across the
+    // 1,000 times n8n actually ran, which is 39 seconds per execution.
+    const r = perExecutionSeconds({
+        frequency: 5, per: 'week', duration: 30, unit: 'minutes', executions30d: 1000
+    });
+    assert.equal(r.ok, true);
+    assert.equal(r.secondsPerExecution, 39);
+    assert.equal(Math.round(r.humanSecondsPerMonth), 38571);
+
+    // The intermediates come back because the UI shows every step. A calculator
+    // that returns only its answer is one the reader has to trust rather than
+    // check, which is the thing the old one got wrong.
+    assert.equal(Math.round(r.manualRunsPerMonth), 21);
+    assert.equal(r.executions30d, 1000);
+
+    // Volume is the divisor, so the SAME manual job across ten times the traffic
+    // is worth a tenth as much per run. This is the property that makes the
+    // stored figure track reality instead of an estimate made once — and the one
+    // nobody could see in the old UI.
+    const busier = perExecutionSeconds({
+        frequency: 5, per: 'week', duration: 30, unit: 'minutes', executions30d: 10000
+    });
+    assert.equal(busier.secondsPerExecution, 4);
+});
+
+test('a workflow that has not run is refused, not divided by one', async () => {
+    const { perExecutionSeconds } = await import(
+        `file://${path.join(ROOT, 'public/logic/roi/roi_math.mjs').replace(/\\/g, '/')}`
+    );
+
+    // The bug this replaced. `Math.max(1, executions)` meant a workflow n8n had
+    // not run in thirty days was told a single execution absorbed an entire
+    // month of human labour: 38,571 seconds per run, which then multiplied
+    // against every historical execution on the Overview tab. Silent, enormous,
+    // and indistinguishable from a real answer.
+    const idle = perExecutionSeconds({
+        frequency: 5, per: 'week', duration: 30, unit: 'minutes', executions30d: 0
+    });
+    assert.equal(idle.ok, false);
+    assert.match(idle.reason, /has not run/);
+
+    // And the refusals that are merely incomplete input say which field.
+    assert.match(perExecutionSeconds({
+        frequency: 0, per: 'week', duration: 30, unit: 'minutes', executions30d: 10
+    }).reason, /how often/);
+    assert.match(perExecutionSeconds({
+        frequency: 5, per: 'week', duration: 0, unit: 'minutes', executions30d: 10
+    }).reason, /how long/);
+    assert.match(perExecutionSeconds({
+        frequency: 5, per: 'fortnight', duration: 3, unit: 'hours', executions30d: 10
+    }).reason, /period and a unit/);
+
+    // A tiny saving still stores as one second rather than rounding to nothing.
+    // Zero means "not configured" everywhere else on the page — the badge, the
+    // coverage tile, the filter — so a real measurement must never land on it.
+    const tiny = perExecutionSeconds({
+        frequency: 1, per: 'month', duration: 1, unit: 'minutes', executions30d: 100000
+    });
+    assert.equal(tiny.ok, true);
+    assert.equal(tiny.secondsPerExecution, 1);
+});
+
+// =========================================== the assistant's own configuration
+//
+// The key and the model moved out of the environment and into the replica, so
+// that installing this next to an n8n instance does not also mean editing a file
+// on the host and restarting a process to try a different model.
+//
+// The whole risk of that move is in one sentence: `GET /api/settings` returns
+// every row of dashboard_settings to any authenticated page. A key in that table
+// would have been readable by anything signed in, in a response nobody would
+// audit. So the key is in dashboard_secrets, and the tests below are about what
+// leaves the DAO rather than about what it stores.
+
+const aiConfig = require(path.join(ROOT, 'src/dao/aiConfigDao'));
+
+test('the stored key never comes back out of the reader a page uses', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    const secret = `sk-proj-${'z'.repeat(40)}abcd`;
+    const priorEnv = process.env.OPENAI_API_KEY;
+
+    await aiConfig.setApiKey(secret, 'u-convo-test');
+    try {
+        const shown = await aiConfig.describe();
+
+        // The one thing that must never happen, asserted against the whole
+        // object rather than against the field somebody remembered to check —
+        // a second field added later that carries the value would pass a
+        // narrower test.
+        assert.ok(!JSON.stringify(shown).includes(secret), 'no path out of describe() has it');
+        assert.equal(shown.configured, true);
+        assert.equal(shown.keyHint, '…abcd', 'the last four, and only the last four');
+        assert.equal(shown.keySource, 'settings');
+        assert.equal(shown.updated_by, 'u-convo-test');
+
+        // And the reader that IS allowed to have it, which nothing answering a
+        // request calls.
+        assert.equal(await aiConfig.apiKey(), secret);
+
+        // Stored wins over the environment. An operator who saves one here while
+        // an old one sits in the server's environment has to be told which is
+        // answering their questions, or the first surprising bill has no
+        // explanation.
+        process.env.OPENAI_API_KEY = 'sk-environment-key-that-should-lose';
+        assert.equal(await aiConfig.apiKey(), secret);
+        assert.equal((await aiConfig.describe()).keySource, 'settings');
+
+        // Clearing falls BACK to the environment rather than turning the
+        // assistant off. A page is not the right authority to override the
+        // host's own configuration.
+        await aiConfig.clearApiKey();
+        const after = await aiConfig.describe();
+        assert.equal(after.configured, true);
+        assert.equal(after.keySource, 'environment');
+    } finally {
+        await localDb.execute('DELETE FROM dashboard_secrets WHERE key = ?', [aiConfig.KEY_SECRET]);
+        if (priorEnv === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = priorEnv;
+    }
+});
+
+test('the model falls back settings → environment → default, and says which', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    const priorEnv = process.env.AI_MODEL;
+    delete process.env.AI_MODEL;
+
+    try {
+        assert.equal(await aiConfig.model(), aiConfig.DEFAULT_MODEL);
+        assert.equal((await aiConfig.describe()).modelSource, 'default');
+
+        process.env.AI_MODEL = 'gpt-from-the-environment';
+        assert.equal(await aiConfig.model(), 'gpt-from-the-environment');
+
+        await localDb.execute(
+            'INSERT INTO dashboard_settings (key, value) VALUES (?, ?) ' +
+            'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+            [aiConfig.MODEL_SETTING, 'gpt-from-settings']
+        );
+        assert.equal(await aiConfig.model(), 'gpt-from-settings');
+        assert.equal((await aiConfig.describe()).modelSource, 'settings');
+    } finally {
+        await localDb.execute('DELETE FROM dashboard_settings WHERE key = ?',
+            [aiConfig.MODEL_SETTING]);
+        if (priorEnv === undefined) delete process.env.AI_MODEL;
+        else process.env.AI_MODEL = priorEnv;
+    }
+});
+
+test('history written before conversations existed is adopted, once', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    await localDb.execute(
+        'INSERT INTO dashboard_chat_history (user_id, role, content) VALUES (?, ?, ?)',
+        [CONVO_USER, 'user', 'a question from before the upgrade']
+    );
+
+    const adopted = await convos.adoptOrphans(CONVO_USER);
+    assert.ok(adopted, 'the orphaned messages get a thread');
+    assert.equal(adopted.title, 'Earlier conversations',
+        'labelled for what it is rather than split into guesses');
+
+    const left = await localDb.query(
+        'SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id = ? AND conversation_id IS NULL',
+        [CONVO_USER]);
+    assert.equal(left.rows[0].n, 0);
+    // Idempotent: the second call finds nothing to adopt and creates nothing.
+    assert.equal(await convos.adoptOrphans(CONVO_USER), null);
+
+    await convos.remove(adopted.id, CONVO_USER);
+});
+
+test('remove what the conversation tests wrote', async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    await convos.forgetAll(CONVO_USER);
+    await localDb.execute('DELETE FROM dashboard_chat_history WHERE user_id = ?', [CONVO_USER]);
+    await localDb.execute('DELETE FROM dashboard_chat_conversations WHERE user_id = ?', [CONVO_USER]);
+    await localDb.execute('DELETE FROM users WHERE id = ?', [CONVO_USER]);
+    const left = await localDb.query(
+        'SELECT COUNT(*) AS n FROM dashboard_chat_conversations WHERE user_id = ?', [CONVO_USER]);
+    assert.equal(left.rows[0].n, 0);
 });
 
 test('remove what the streaming tests wrote', async () => {
@@ -1193,9 +2058,220 @@ test('remove what the streaming tests wrote', async () => {
     const localDb = require(path.join(ROOT, 'src/config/localDb'));
     for (const id of ['u-stream-test', 'u-abort-test']) {
         await localDb.execute('DELETE FROM dashboard_chat_history WHERE user_id = ?', [id]);
+        // The conversations these turns created. Not left to the foreign key:
+        // SQLite enforces one only when `PRAGMA foreign_keys` is on, and a test
+        // that depends on a pragma being set somewhere else is a test that
+        // silently stops cleaning up.
+        await localDb.execute('DELETE FROM dashboard_chat_conversations WHERE user_id = ?', [id]);
+        await localDb.execute('DELETE FROM dashboard_user_memories WHERE user_id = ?', [id]);
         await localDb.execute('DELETE FROM users WHERE id = ?', [id]);
     }
     const left = await localDb.query(
         "SELECT COUNT(*) AS n FROM dashboard_chat_history WHERE user_id LIKE 'u-%-test'", []);
     assert.equal(left.rows[0].n, 0);
+});
+
+// ================================================= H-06 · what the AI can reach
+//
+// The three mechanisms that replaced "the assistant may run any SELECT". They
+// are tested here rather than through the chat endpoint because each is a
+// property of the data layer, and asserting them through a model call would
+// make a security guarantee depend on what a model happened to ask for.
+//
+//   OPEN_READONLY   it cannot write, whatever the statement says
+//   the ai_* views  the payload columns are not there to be selected
+//   ai_scope        the restriction is INSIDE the relation, so a subquery or a
+//                   UNION meets it rather than stepping around it
+//
+// The third is the one H-06 called impossible: "το ελεύθερο SQL δεν στενεύεται
+// με φίλτρο — ένα subquery ή UNION το προσπερνά". That is true of an appended
+// clause and false of a view definition, which is the whole change.
+
+test('the assistant cannot write to the replica, whatever it asks', async () => {
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+    await assert.rejects(
+        () => ro.query('CREATE TABLE ai_should_not_exist (a)', [], { scope: null }),
+        /SQLITE_READONLY/
+    );
+});
+
+test('the payload columns are absent from the views, not filtered out of them', async () => {
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+    // `no such column` from SQLite, not a rejection from our own parser. The
+    // distinction matters: a parser can be spelled around, a missing column
+    // cannot.
+    for (const column of ['input_data', 'error_stack', 'error_message']) {
+        await assert.rejects(
+            () => ro.query(`SELECT ${column} FROM ai_errors LIMIT 1`, [], { scope: null }),
+            /no such column/,
+            `${column} is reachable through ai_errors`
+        );
+    }
+    await assert.rejects(
+        () => ro.query('SELECT normalized_message FROM ai_error_groups LIMIT 1', [], { scope: null }),
+        /no such column/
+    );
+});
+
+test('a scope restriction survives a subquery and a UNION', async () => {
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+
+    const all = await ro.query('SELECT COUNT(*) AS n FROM ai_workflows', [], { scope: null });
+    const total = all[0].n;
+    assert.ok(total >= 2, 'need at least two workflows to tell scoped from unscoped');
+
+    const two = (await ro.query('SELECT id FROM ai_workflows LIMIT 2', [], { scope: null }))
+        .map((r) => r.id);
+
+    const scoped = await ro.query('SELECT COUNT(*) AS n FROM ai_workflows', [], { scope: two });
+    assert.equal(scoped[0].n, 2, 'the view itself is narrowed');
+
+    // The two shapes H-06 named. Both must see the narrowed relation.
+    const unioned = await ro.query(
+        'SELECT COUNT(*) AS n FROM (SELECT id FROM ai_workflows UNION ALL SELECT id FROM ai_workflows)',
+        [], { scope: two }
+    );
+    assert.equal(unioned[0].n, 4, `a UNION reached ${unioned[0].n} rows instead of 4`);
+
+    const subqueried = await ro.query(
+        'SELECT COUNT(*) AS n FROM ai_workflows WHERE id IN (SELECT id FROM ai_workflows)',
+        [], { scope: two }
+    );
+    assert.equal(subqueried[0].n, 2);
+});
+
+test('a forgotten scope is refused rather than defaulting to everything', async () => {
+    const ro = require(path.join(ROOT, 'src/config/readonlyDb'));
+    await assert.rejects(
+        () => ro.query('SELECT 1', []),
+        /explicit scope/,
+        'an omitted scope must not quietly mean unrestricted'
+    );
+});
+
+test('the catalogue resolves a name a query would have had to guess', async () => {
+    // The gap this closes: asked about "the Call Center errors", the model has
+    // no way to learn that Call Center is a FOLDER rather than a workflow, and
+    // a guessed id returns an empty result that reads as "nothing happened".
+    const catalog = require(path.join(ROOT, 'src/ai/catalog'));
+    const hits = await catalog.search({ query: 'call center', scope: null, limit: 20 });
+    const kinds = new Set(hits.map((h) => h.kind));
+    assert.ok(hits.length > 0, 'the catalogue found nothing');
+    assert.ok(kinds.size >= 1);
+    for (const h of hits) {
+        assert.ok(h.id && h.name && h.kind, 'every hit carries what the other tools need');
+    }
+});
+
+test('every metric the tool offers actually runs', async () => {
+    // The enum in the tool description is what the model chooses from, so a
+    // metric listed there that cannot execute is a promise the assistant makes
+    // and then breaks mid-answer.
+    const { execute } = require(path.join(ROOT, 'src/ai/execute'));
+    const { METRICS } = require(path.join(ROOT, 'src/ai/tools/analytics'));
+    const ctx = { scope: { unrestricted: true }, visibleIds: null, userId: 'u-stream-test' };
+
+    for (const metric of Object.keys(METRICS)) {
+        const result = await execute('get_analytics', { metric }, ctx);
+        assert.ok(result !== undefined && result !== null, `${metric} returned nothing`);
+    }
+});
+
+test('the tool list is built from the same registry the prompt describes', async () => {
+    const { build } = require(path.join(ROOT, 'src/ai/tools'));
+    const { METRICS } = require(path.join(ROOT, 'src/ai/tools/analytics'));
+
+    const tools = build({ sqlEnabled: true });
+    const analytics = tools.find((t) => t.function.name === 'get_analytics');
+    assert.deepEqual(
+        analytics.function.parameters.properties.metric.enum,
+        Object.keys(METRICS),
+        'a metric added to the registry must appear in the tool without a second edit'
+    );
+
+    // The escape hatch is conditional, and the model must not be shown a tool
+    // it cannot use.
+    const without = build({ sqlEnabled: false });
+    assert.ok(!without.some((t) => t.function.name === 'run_sql'));
+});
+
+// ==================================== H-06 · the documentation tool's own edges
+//
+// Three things that were wrong when this was first written, each found by
+// calling the real service rather than by reading the code.
+
+test('the docs tool refuses to pick anything that writes', async () => {
+    // The service offers `give_feedback` alongside its search tool. That posts a
+    // message to the n8n team — an outward-facing write on somebody else's
+    // service, sent under this user's credential — and an assistant must not be
+    // able to reach for it on its own. The first version picked
+    // "whatever looks likely, else tools[0]", which would have chosen it the day
+    // the server reordered its list.
+    const docs = require(path.join(ROOT, 'src/ai/tools/docs'));
+    const { argumentsFor } = docs._internal;
+    assert.equal(typeof argumentsFor, 'function');
+
+    // The picker is not exported on its own, so this asserts the shape of the
+    // rule it applies: a name that writes must not match, whatever else it says.
+    const writes = ['give_feedback', 'submit_report', 'send_docs_feedback', 'create_doc_query'];
+    const reads = ['search_n8n_knowledge_sources', 'ask_docs', 'query_documentation'];
+    const looksReadable = (n) => /search|retriev|ask|query|docs?/i.test(n)
+        && !/feedback|report|submit|create|write|send/i.test(n);
+
+    for (const name of writes) assert.equal(looksReadable(name), false, `${name} was selectable`);
+    for (const name of reads) assert.equal(looksReadable(name), true, `${name} was rejected`);
+});
+
+test('the docs question is shaped by the tool\'s own schema, not by guesswork', () => {
+    // The first attempt sent { query, question } to cover either spelling. The
+    // service declares `additionalProperties: false`, so the extra key was not
+    // ignored — the whole call was rejected, and the rejection arrived as an
+    // opaque "Error calling tool" naming nothing.
+    const { argumentsFor } = require(path.join(ROOT, 'src/ai/tools/docs'))._internal;
+
+    const real = {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+        additionalProperties: false
+    };
+    assert.deepEqual(argumentsFor(real, 'why'), { query: 'why' },
+        'sent a key the schema does not allow');
+
+    // A server that calls it something else must still work.
+    assert.deepEqual(
+        argumentsFor({ properties: { question: { type: 'string' } }, required: ['question'] }, 'why'),
+        { question: 'why' }
+    );
+    // And an absent or unusable schema falls back rather than throwing.
+    assert.deepEqual(argumentsFor(undefined, 'why'), { query: 'why' });
+    assert.deepEqual(argumentsFor({ properties: { n: { type: 'number' } } }, 'why'), { query: 'why' });
+});
+
+test('describe_views exists, and reports only what run_sql can actually read', async () => {
+    // It was promised in the run_sql description before it existed. The model
+    // would have called it and been told "Unknown tool" mid-answer — the exact
+    // failure the conditional registration elsewhere is designed to avoid.
+    const { execute } = require(path.join(ROOT, 'src/ai/execute'));
+    const { ALLOWED_VIEWS } = require(path.join(ROOT, 'src/config/aiViews'));
+    const ctx = { scope: { unrestricted: true }, visibleIds: null, userId: 'u-stream-test' };
+
+    const all = await execute('describe_views', {}, ctx);
+    assert.equal(all.views.length, ALLOWED_VIEWS.size);
+    for (const v of all.views) {
+        assert.ok(ALLOWED_VIEWS.has(v.view), `${v.view} is described but not readable`);
+        assert.ok(v.columns.length > 0, `${v.view} reported no columns`);
+    }
+
+    // The columns it advertises must be the ones that exist — this is generated
+    // from PRAGMA rather than written down precisely so it cannot drift, and
+    // this asserts that it did not.
+    const errors = all.views.find((v) => v.view === 'ai_errors');
+    assert.ok(errors.columns.includes('error_category'));
+    for (const hidden of ['input_data', 'error_stack', 'error_message']) {
+        assert.ok(!errors.columns.includes(hidden), `${hidden} was advertised as readable`);
+    }
+
+    const one = await execute('describe_views', { view: 'ai_workflows' }, ctx);
+    assert.equal(one.views.length, 1);
 });

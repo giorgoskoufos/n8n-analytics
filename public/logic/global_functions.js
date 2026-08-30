@@ -62,6 +62,77 @@ window.formatTime = (utcStr, options = {}) => {
 };
 
 /**
+ * Money, in the currency this deployment configured.
+ *
+ * Here rather than in roi.js because it was in roi.js, hard-coded to USD, while
+ * the settings page asked for an hourly rate with a `$` printed beside the box —
+ * two files independently deciding what currency a number is in, and both
+ * deciding wrong for anybody outside the United States. There is no conversion:
+ * the rate somebody typed is taken to be in the configured currency, which is
+ * the only honest reading available to a dashboard holding no exchange rates.
+ *
+ * `narrow` gives the symbol alone (€12.00) for tight places like a table cell;
+ * the default gives whatever the locale thinks is unambiguous.
+ */
+window.formatMoney = (amount, { narrow = false, decimals = 2 } = {}) => {
+    const value = Number(amount);
+    const currency = (window.userSettings && window.userSettings.currency) || 'EUR';
+    try {
+        return new Intl.NumberFormat(undefined, {
+            style: 'currency',
+            currency,
+            currencyDisplay: narrow ? 'narrowSymbol' : 'symbol',
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals
+        }).format(Number.isFinite(value) ? value : 0);
+    } catch {
+        // An unknown code, or a browser without narrowSymbol. Better a number
+        // with a code in front of it than a page that throws while rendering a
+        // table cell.
+        return `${currency} ${(Number.isFinite(value) ? value : 0).toFixed(decimals)}`;
+    }
+};
+
+/** Just the symbol, for a label that sits beside an input rather than in it. */
+window.currencySymbol = () => {
+    const currency = (window.userSettings && window.userSettings.currency) || 'EUR';
+    try {
+        return new Intl.NumberFormat(undefined, {
+            style: 'currency', currency, currencyDisplay: 'narrowSymbol',
+            minimumFractionDigits: 0, maximumFractionDigits: 0
+        }).formatToParts(0).find((part) => part.type === 'currency')?.value || currency;
+    } catch {
+        return currency;
+    }
+};
+
+/**
+ * Seconds as the largest two units that are not zero.
+ *
+ * "2d 4h", not "2d 4h 13m 6s". Somebody reading a total of saved time is asking
+ * how big it is, and the third unit is never the part that answers that — while
+ * four of them turn a KPI into something you have to parse rather than read.
+ */
+window.formatDuration = (totalSeconds) => {
+    let secs = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    if (secs === 0) return '0m';
+
+    const units = [
+        ['d', 86400], ['h', 3600], ['m', 60], ['s', 1]
+    ];
+    const parts = [];
+    for (const [suffix, size] of units) {
+        const n = Math.floor(secs / size);
+        if (n > 0 || parts.length > 0) {
+            if (n > 0) parts.push(`${n}${suffix}`);
+            secs -= n * size;
+        }
+        if (parts.length === 2) break;
+    }
+    return parts.length ? parts.join(' ') : '0m';
+};
+
+/**
  * Loads the dashboard settings once per page.
  *
  * Memoised and exposed as a promise: several scripts on the same page want the
@@ -118,6 +189,12 @@ const DISPATCHABLE_ACTIONS = [
     'addAlertHeader', 'removeAlertHeader', 'importAlertCurl', 'exportAlertCurl',
     // Settings navigation (F-24 §2)
     'showSettingsSection', 'showInsightsGroup',
+    // ROI: the two tabs, and the retry in a failed table row
+    'showRoiSection',
+    // Integrations (H-06 · the documentation service)
+    'connectDocs', 'disconnectDocs',
+    // The assistant's own provider credentials
+    'saveAiConfig', 'clearAiKey',
     // Trace panel, now on the Slowest tab too (F-24 §5)
     'openTrace', 'closeTraceModal'
 ];
@@ -151,29 +228,12 @@ document.addEventListener('click', (event) => {
     }
 });
 
-/**
- * Renders markdown to sanitized HTML.
- *
- * marked passes HTML in its input straight through to the output, so its result
- * must never reach innerHTML unsanitized. Falls back to plain escaped text if
- * either library failed to load, so a CDN or file error degrades to unformatted
- * text rather than to an injection point.
- */
-window.renderMarkdownSafely = function (text) {
-    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
-        console.warn('[SECURITY] marked or DOMPurify unavailable — rendering as plain text.');
-        return window.escapeHtml(text);
-    }
-    return DOMPurify.sanitize(marked.parse(text), {
-        ALLOWED_TAGS: [
-            'p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'blockquote',
-            'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-            'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'span'
-        ],
-        ALLOWED_ATTR: [], // no href, no src, no style — nothing to hang a payload on
-        FORBID_TAGS: ['style', 'script', 'iframe', 'form', 'input', 'a', 'img']
-    });
-};
+// `renderMarkdownSafely` lived here and had exactly one caller, the assistant.
+// It is `logic/chat/render.js` now — not moved, replaced: its policy was
+// `ALLOWED_ATTR: []`, which is the right setting for untrusted markdown in
+// general and makes syntax highlighting unreachable in particular, since a
+// highlighter's entire output is `<span class="...">`. The widened policy, and
+// the argument for each thing it widens, is in that file.
 
 /**
  * Global Manual Sync Trigger

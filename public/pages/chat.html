@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Analytics Chat</title>
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+    <title>Assistant · n8n Dashboard</title>
     <script src="../logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
@@ -12,51 +13,116 @@
     <link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
-    <link rel="manifest" href="../assets//site.webmanifest">
+    <link rel="manifest" href="../assets/site.webmanifest">
 </head>
-<body class="bg-n8n-dark text-white">
-    <header class="bg-n8n-card border-b border-line p-4 shadow-md flex justify-between items-center z-10">
-        <div class="flex items-center gap-3">
-            <div class="bg-n8n-primary/20 w-10 h-10 flex items-center justify-center rounded-lg border border-n8n-primary/30 shadow-inner">
-                <img src="../assets/n8n_db.svg" alt="n8n logo" class="w-6 h-6 object-contain">
-            </div>
-            <div>
-                <h1 class="text-lg font-bold">n8n Data Analyst</h1>
-                <p class="text-xs text-ink-2">Powered by AI</p>
-            </div>
-        </div>
-        <div class="flex items-center gap-3">
-            <button data-action="logout" class="text-ink-2 hover:text-white transition-colors text-sm flex items-center gap-1">
-                <i class="fa-solid fa-right-from-bracket fa-fw"></i>Logout
+<!--
+  `data-assistant="off"`: this page IS the conversation, so header.js does not
+  also float a panel over it. Everything else about the shell — the rail, the
+  sync indicator, the page header — it gets like any other page. It did not have
+  them before, which is why it read as a different application.
+-->
+<body class="p-4 md:p-8" data-assistant="off" data-fill>
+    <div class="max-w-3xl mx-auto page-fill">
+        <div id="header-target" data-title="Assistant"
+             data-subtitle="Answers from this dashboard's own analyses"></div>
+
+        <!-- The switcher, on the page whose whole subject is one thread. -->
+        <div class="flex items-center gap-2 mb-3" style="position:relative">
+            <button class="assistant-thread" type="button" data-assistant="threads"
+                    aria-haspopup="listbox" aria-expanded="false"
+                    aria-controls="assistantThreads" aria-label="Switch conversation"
+                    style="flex:0 1 auto;max-width:24rem">
+                <span class="msg-avatar" aria-hidden="true"><i class="fa-solid fa-robot"></i></span>
+                <span class="thread-title" id="assistantThreadTitle">Assistant</span>
+                <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
             </button>
-            <button data-action="closeWindow" class="text-ink-2 hover:text-white transition-colors text-sm flex items-center gap-1">
-                <i class="fa-solid fa-xmark fa-fw"></i>Close
+            <button class="btn btn-sm" type="button" data-assistant="new">
+                <i class="fa-solid fa-pen-to-square"></i> New
             </button>
+            <div id="assistantThreads" class="tag-menu" role="listbox"
+                 aria-label="Conversations" hidden style="top:calc(100% + 0.25rem);bottom:auto;max-width:24rem"></div>
         </div>
-    </header>
-    <main id="chatBox" class="chat-container p-4 md:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
-        <div class="flex gap-4 items-start">
-            <div class="bg-indigo-600/20 border border-indigo-500/30 w-10 h-10 shrink-0 flex items-center justify-center rounded-full mt-1">
-                <i class="fa-solid fa-robot fa-fw text-indigo-400 text-lg"></i>
+
+        <!-- `assistant-page` carries the reading size. A full page has room for
+             15px and a 420px panel does not; it is one declaration in the CSS
+             rather than a flag threaded through every message. -->
+        <!--
+          `chat-shell` fills what is left of the viewport instead of
+          `calc(100dvh - 190px)`.
+
+          190px was the height of everything above this card measured once, on a
+          desktop. It is wrong on a phone in both directions and for the same
+          reason: the title wraps at 390px, so the card starts lower AND is told
+          to be the same height, which pushed the composer off the bottom of a
+          short screen; and where the header happened to be shorter than the
+          guess, the page ended in a band of empty card. The chain of `flex: 1`
+          from `.shell-main` down to here does not have a number in it, so
+          there is nothing to be wrong.
+        -->
+        <div class="card card-pad flex flex-col assistant-page chat-shell">
+            <div id="assistantLog" class="assistant-log" role="log"
+                 aria-label="Conversation" tabindex="0"
+                 style="background:transparent;padding:0 0.25rem 0 0"></div>
+
+            <p id="assistantStatus" class="sr-only" role="status" aria-live="polite"></p>
+
+            <div class="pt-3" style="border-top:1px solid var(--line)">
+                <button id="assistantJump" class="assistant-jump" type="button" hidden>
+                    <i class="fa-solid fa-arrow-down" aria-hidden="true"></i> New answer
+                </button>
+
+                <div id="assistantTagStrip" class="tag-strip mb-1.5" hidden></div>
+
+                <div class="assistant-composer" style="position:relative">
+                    <div id="assistantTagMenu" class="tag-menu" role="listbox"
+                         aria-label="Tag something" hidden></div>
+
+                    <textarea id="assistantInput" rows="1" maxlength="2000"
+                              placeholder="Ask about your workflows…"
+                              aria-label="Ask the assistant"
+                              aria-autocomplete="list" aria-expanded="false"
+                              aria-controls="assistantTagMenu"></textarea>
+
+                    <div class="assistant-composer-row">
+                        <button class="assistant-icon-btn" type="button" data-assistant="tools"
+                                title="Tools" aria-label="Choose which tools to use"
+                                aria-expanded="false">
+                            <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                        </button>
+                        <span id="assistantToolHint" class="assistant-hint"></span>
+                        <button id="assistantSend" class="assistant-send" type="button" aria-label="Send">
+                            <i class="fa-solid fa-arrow-up" aria-hidden="true"></i>
+                        </button>
+                        <button id="assistantStop" class="assistant-stop" type="button" hidden>
+                            <i class="fa-solid fa-stop" aria-hidden="true"></i> Stop
+                        </button>
+                    </div>
+                </div>
+
+                <!-- `disclaimer` turns off the uppercase and the 0.12em of tracking
+                     below `sm`: this is a footnote, and three lines of caps under
+                     the composer is most of what a phone shows below the fold. -->
+                <p class="label disclaimer mt-2 text-center">Reads a replica of your n8n data, and can be
+                    wrong — open “How this was worked out” to see what it actually measured.</p>
             </div>
-            <div class="bg-n8n-card border border-line p-4 rounded-2xl rounded-tl-none max-w-[85%] shadow-sm">
-                <p class="text-sm leading-relaxed">Hi! I'm your AI assistant. I can analyze your n8n database and give you insights.<br><br>Try asking me:<br><span class="text-ink-2 italic">"Which workflow had the most errors yesterday?"</span></p>
-            </div>
         </div>
-    </main>
-    <footer class="bg-n8n-dark border-t border-line p-4 shrink-0">
-        <div class="max-w-4xl mx-auto relative">
-            <textarea id="userInput" rows="1" placeholder="Ask something about your data..." 
-                      class="block w-full bg-n8n-card border border-line-2 rounded-xl pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-indigo-500 resize-none overflow-hidden transition-all"></textarea>
-            <button id="sendBtn" class="absolute right-2 bottom-2 w-8 h-8 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <i class="fa-solid fa-paper-plane fa-fw text-sm"></i>
-            </button>
-        </div>
-        <p class="text-center text-xs text-ink-3 mt-3">AI can make mistakes. Always verify the results.</p>
-    </footer>
+    </div>
+
+    <!--
+      Listed here rather than injected by header.js, which is what happens on
+      every other page. This is the one document whose whole purpose is the
+      conversation, so its dependency on the conversation's code is not an
+      implementation detail worth hiding.
+    -->
+    <script src="/vendor/marked.umd.js"></script>
+    <script src="/vendor/purify.min.js"></script>
     <script src="../logic/global_functions.js"></script>
     <script src="../logic/ui/components.js"></script>
-    <script src="../logic/chat-core.js"></script><script type="module" src="../logic/app.js"></script>
+    <script src="../logic/chat/store.js"></script>
+    <script src="../logic/chat/render.js"></script>
+    <script src="../logic/chat/tags.js"></script>
+    <script src="../logic/chat-core.js"></script>
     <script src="../logic/chat.js"></script>
+    <script src="../logic/header.js"></script>
 </body>
 </html>

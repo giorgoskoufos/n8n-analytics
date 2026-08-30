@@ -1,5 +1,5 @@
 /**
- * Folder, tag and project filters (F-16).
+ * Workflow, folder, tag and project filters (F-16).
  *
  * 163 workflows in one flat list does not scale, and n8n already knows how they
  * are organised — 16 folders with real hierarchy, 5 tags, a project. The
@@ -31,6 +31,16 @@ const FOLDER_TREE_SQL = `
 
 const TAG_SQL = 'SELECT wt.workflow_id FROM workflows_tags wt WHERE wt.tag_id = ?';
 
+// One workflow.
+//
+// Written as a subquery over `workflow_entity` rather than as `column = ?`,
+// which would be shorter and would also be the one filter here that is not a
+// set of ids — and the reason every one of these is a set of ids is that they
+// then compose with each other and with the scope clause by the same rule.
+// Going through the table also means an id that belongs to no workflow selects
+// nothing, rather than being taken on faith.
+const WORKFLOW_SQL = 'SELECT w.id FROM workflow_entity w WHERE w.id = ?';
+
 const PROJECT_SQL = 'SELECT sw.workflow_id FROM shared_workflow sw WHERE sw.project_id = ?';
 
 // Ids in n8n are nanoid-style: short, alphanumeric, no punctuation. Validating
@@ -52,6 +62,7 @@ function groupingClause(query, column) {
     // Each filter is independent and they intersect: folder AND tag means
     // workflows in that folder that also carry that tag.
     const filters = [
+        ['workflow', query.workflow, WORKFLOW_SQL],
         ['folder', query.folder, FOLDER_TREE_SQL],
         ['tag', query.tag, TAG_SQL],
         ['project', query.project, PROJECT_SQL]
@@ -75,4 +86,4 @@ function groupingClause(query, column) {
     };
 }
 
-module.exports = { groupingClause, FOLDER_TREE_SQL, TAG_SQL, PROJECT_SQL };
+module.exports = { groupingClause, WORKFLOW_SQL, FOLDER_TREE_SQL, TAG_SQL, PROJECT_SQL };

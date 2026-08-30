@@ -73,9 +73,21 @@ n8n 2.x does ship insights tables in self-hosted installs — `insights_by_perio
 - **Error lifecycle** — acknowledge, resolve or ignore a fingerprint with a note, and it reopens by itself if the problem comes back. Ignored problems stop alerting but keep being counted.
 - **Folders, tags and projects** — every figure filterable by n8n's own structure, with totals rolling up the folder hierarchy.
 - **Self-observability** — the dashboard reports on its own pipeline: when it last synced, how long passes take, what failed, what is queued, and how the replica is growing.
-- **ROI Analytics** — assign manual time-saved and hourly rates per workflow; get financial trends over time.
+- **ROI Analytics** — two tabs on one page: **Overview** totals the time and money
+  saved, and **Configure** is where the per-workflow figures behind those totals
+  are set. They are together because the question the Overview raises — *why is
+  that workflow showing zero?* — is answered by the inputs, and a number nobody
+  can see the input to is a number nobody can correct. A **coverage** tile says
+  how many workflows are configured at all, so a total from a partly-filled
+  instance reads as the floor it is rather than as a measurement.
+
+  The per-run figure is not typed from memory. **Work it out** asks for the job
+  the automation replaced — *a person did this 5 times a week and it took 30
+  minutes* — and divides a month of that work by how many times n8n actually ran,
+  showing every step as you type. Dividing by measured volume is what keeps the
+  figure honest when a workflow's traffic changes.
 - **Deep-linking** — one click from a failing execution into the n8n workflow editor.
-- **AI Analytics Assistant** — natural-language questions answered via a text-to-SQL pipeline ("Which workflow was slowest yesterday?").
+- **AI Analytics Assistant** — natural-language questions answered by calling the dashboard's own analyses ("Which workflow was slowest yesterday?"), so its numbers agree with the pages.
 - **Audit extracts** — CSV/JSON exports with execution IDs, error stacks, and metadata.
 - **Security defaults** — JWT auth against your existing n8n users, rate limiting, strict CSP, sanitized rendering.
 
@@ -86,7 +98,7 @@ n8n 2.x does ship insights tables in self-hosted installs — `insights_by_perio
 ```
 n8n PostgreSQL  ──ETL every 5 min──▶  dashboard.sqlite  ──▶  Express API  ──▶  Browser UI
                                             ▲                                      │
-                                            └──────────  AI text-to-SQL  ◀─────────┘
+                                            └────────  AI tools + read-only views  ◀────┘
 ```
 
 The ETL (`node-cron`) copies a narrow set of columns from n8n's `workflow_entity` and `execution_entity` into the local replica, and extracts structured error details from failed executions. Everything the dashboard renders is read from the replica.
@@ -161,13 +173,13 @@ When an execution fails, the ETL parses its payload and stores a structured reco
 >
 > Three consequences:
 > - Treat `dashboard.sqlite` with the same care as your n8n database.
-> - The AI Assistant executes any read-only SQL it generates against the replica, so it *can* reach these columns. A table and column allowlist is planned; until it lands, the assistant is restricted to n8n owners and admins — the roles that can already read every workflow in n8n.
+> - The AI Assistant **cannot** reach these columns. It reads the replica through a separate `OPEN_READONLY` connection on which the only visible relations are a set of `ai_*` views, and those views do not define `input_data`, `error_stack` or `error_message`. A query naming one fails inside SQLite as `no such column`, not in an application check that could be worked around.
 > - `input_data` is cleared from rows older than 30 days by default, because nothing in the dashboard reads it. `error_stack` is kept, because the classifier re-derives from it. Both are configurable — see [Operating it](#-operating-it).
 
 ### Guarantees that do hold
 
 - **Read-only against n8n.** No `INSERT`/`UPDATE`/`DELETE` path to your n8n database exists anywhere in the code.
-- **No SQL mutation locally.** The AI pipeline rejects anything that is not a `SELECT`/`WITH`, and blocks DML/DDL keywords.
+- **No SQL mutation locally.** The assistant's connection is opened `OPEN_READONLY`, so a write fails with `SQLITE_READONLY` regardless of what the statement says. A guard also rejects anything that is not a `SELECT`/`WITH` and blocks DML/DDL keywords, but it is the second line, not the first.
 - **Air-gapped from production.** AI-generated SQL runs against the local SQLite file. Even a malicious query has no route to your Postgres server.
 - **Helmet + strict CSP.** `script-src-attr 'none'`, no `unsafe-inline`, no external `connect-src`. Rendered markdown passes through DOMPurify with a restricted tag allowlist.
 - **Scoped reads.** Every analytics query is narrowed to the workflows the caller's n8n projects own, including the endpoints addressed by id — an execution outside your projects answers 404, the same as one that does not exist.
@@ -198,7 +210,7 @@ Authentication says *whether* you get in. Authorization decides *what you then s
 Two consequences worth knowing before you add a second user:
 
 - **Instance-wide settings and forced syncs are owner/admin only.** Both change something for everybody.
-- **The AI Assistant is owner/admin only for now.** It answers by running SQL it wrote itself, and a filter cannot be safely bolted onto a query a model composed — one subquery steps around it. Scoped users get an explanatory 403 rather than an answer computed over everyone's data. This lifts once the table allowlist lands.
+- **The AI Assistant is available to every user**, and answers within their own scope. It used to be owner/admin only, because a filter cannot be safely bolted onto a query a model composed — one subquery steps around it. It no longer composes those queries, and the restriction now lives inside the views it reads, where a subquery meets it rather than avoiding it.
 
 Membership is re-mirrored on every sync, wholesale rather than incrementally. That matters: removing someone from a project in n8n is expressed by the row *disappearing*, and a sync that only ever inserts and updates could never observe a disappearance — the revoked user would keep their access here forever.
 
@@ -256,16 +268,66 @@ Two are left out on purpose. `deletedAt` would always be NULL here, because the 
 
 ## 🤖 AI Chat Assistant
 
-A three-step text-to-SQL pipeline:
+> **In depth:** [documentation/ai/how-it-works.md](documentation/ai/how-it-works.md) —
+> what you can ask it, what it refuses and why, and how to check an answer. No code.
+> [documentation/ai/developers.md](documentation/ai/developers.md) — the request
+> lifecycle, the four safety mechanisms, and how to add an analysis.
 
-1. **Intent → SQL.** Your question plus the replica schema go to the model, which returns SQLite.
-2. **Guarded execution.** The query must be a `SELECT` or `WITH`; DML/DDL keywords are rejected. It runs against `dashboard.sqlite`.
-3. **Results → prose.** The rows go back to the model for a human-readable answer.
+The assistant answers by calling the dashboard's own analyses rather than by writing
+queries. Ask "why did Call Center fail yesterday" and it looks up what *Call Center* is,
+reads the error intelligence for that folder, and drills into the group that stands out —
+the same three steps a person would take.
 
-The generated SQL is shown alongside every answer, so you can always check what was actually asked. Requires `OPENAI_API_KEY`; the rest of the dashboard works without it.
+**What it can reach**
 
-> [!IMPORTANT]
-> **Available to n8n owners and admins only.** The pipeline runs SQL the model composed, over the whole replica — including the raw error columns described under [Security & data privacy](#-security--data-privacy). Restricting it to the roles that can already see every workflow in n8n is the honest position until a table and column allowlist replaces free-form SQL. Everyone else receives a 403 that says so.
+| | |
+|---|---|
+| **20 analyses** | The same functions the pages call, so the chat and the charts cannot disagree. |
+| **A catalogue** | Every workflow, folder, tag, project, node type and error group, searchable by name — this is how "the Call Center errors" resolves to a folder rather than being guessed at. |
+| **Drill-downs** | One execution's timing, one workflow's failures, one error group's occurrences. |
+| **A query escape hatch** | For questions no analysis covers. Read-only, restricted to the `ai_*` views, forced `LIMIT`, and a timeout. |
+| **The n8n documentation** | Optional, and connected per person from **Settings > Integrations**. The tool is not offered to anyone who has not connected it. |
+
+**What it cannot reach, by construction**
+
+Execution payloads, raw error messages, stack traces, credentials, business-metadata values,
+and other users' conversations. These are not filtered out by a check in the application —
+they are absent from the views the assistant's connection can see, so SQLite refuses them.
+
+**Three independent mechanisms**
+
+| Threat | Mechanism |
+|---|---|
+| Writing to the replica | `OPEN_READONLY` — enforced by SQLite, below any SQL |
+| Reading customer data | The `ai_*` views simply have no such column |
+| Reading another project's data | A membership test **inside** each view, so a subquery or `UNION` cannot step around it |
+
+Every answer carries a collapsed *How this was worked out* trail listing the analyses it used.
+The generated SQL is no longer displayed, because it is no longer the reasoning.
+
+**Connecting the documentation service**
+
+There is no token to paste anywhere. The service supports only
+`authorization_code` and `refresh_token` — no machine grant — so it has to be
+approved in a browser once. Settings > Integrations does that; on a box with no
+browser, `node src/scripts/connectDocsMcp.js <your-email>` does the same thing
+from a terminal.
+
+The connection is **per person**, and that is about accountability rather than
+privacy: the documentation is public, but the credential is issued against the
+approver's own account at the service, so one shared connection would attribute
+every question to one person and land any misuse on them. Each user connects
+their own, and nobody falls back to anybody else's.
+
+Requires an OpenAI API key, set in **Settings > Integrations**; the rest of the
+dashboard works without one. `gpt-5.4-mini` is the recommended model and the
+default — a replacement has to accept `temperature` *and* support function tools
+on `/v1/chat/completions`, and several recent models fail one or the other on
+the first question rather than at save time.
+
+The key and the model can also come from `OPENAI_API_KEY` and `AI_MODEL` in the
+environment, which is what they used to require. That path is a fallback now:
+anything saved in Settings wins, and the page says which of the two is answering.
 
 ---
 
@@ -275,7 +337,7 @@ The generated SQL is shown alongside every answer, so you can always check what 
 
 - **Node.js 20+** (the Docker image uses `node:22-alpine`; Node 18 is end-of-life and no longer receives security patches)
 - **PostgreSQL access** to your n8n database — read-only credentials are enough; the dashboard never writes to it
-- **OpenAI API key** — only if you want the AI Assistant
+- **OpenAI API key** — only if you want the AI Assistant. Paste it into Settings > Integrations after the first login; no environment variable is needed
 
 ### Environment (`.env`)
 
@@ -304,7 +366,10 @@ DASHBOARD_DB_PORT=5432
 N8N_EDITOR_BASE_URL=https://your-n8n-instance.com
 
 # --- AI Assistant (optional) ---
-OPENAI_API_KEY=sk-proj-your-key-here
+# Both are optional and both are fallbacks: Settings > Integrations writes them
+# into the dashboard's database, needs no restart, and takes precedence.
+#OPENAI_API_KEY=sk-proj-your-key-here
+#AI_MODEL=gpt-5.4-mini            # the default; must do temperature AND function tools
 
 # --- ETL ---
 SYNC_INTERVAL_MINUTES=5          # optional, defaults to 5

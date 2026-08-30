@@ -216,6 +216,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    /* Wraps. On a narrow viewport the heading, its eyebrow and two buttons do
+       not fit on one row, and a row that refuses to wrap does not get shorter —
+       it breaks the words inside the buttons instead, which is how "Evaluate
+       now" became two lines inside a control 30px tall. */
+    flex-wrap: wrap;
     gap: 0.75rem;
     padding: 0.875rem 1.25rem;
     border-bottom: 1px solid var(--line);
@@ -322,6 +327,7 @@
     color: var(--ink-2);
     font-size: 12px;
     font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
     transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
   }
@@ -396,7 +402,23 @@
     font-weight: 600;
     cursor: pointer;
   }
+  /* The date input's width belongs to the date input, not to a `w-28` repeated
+     on six of them in three files. A native date control is its text plus a
+     picker glyph the browser draws, and at the 16px this goes up to on a phone
+     that no longer fits 112px — the year and the glyph landed on top of each
+     other. It grows to fit and the field wraps if the row cannot hold both. */
+  .field input[type="date"] { width: auto; min-width: 0; flex: 0 1 auto; }
+  /* The dash between a range's two ends. */
+  .field-sep { color: var(--ink-3); flex: none; }
   .field select:focus, .field input:focus { outline: none; }
+  /* The control takes the room the field has, whatever that turns out to be.
+     `min-width: 0` because a `select` will otherwise refuse to shrink below its
+     longest option, which on the workflow filter is a name nobody chose to be
+     short. */
+  .field select, .field input[type="text"], .field input[type="search"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 
   /* ---- Table ---------------------------------------------------------- */
   /*
@@ -476,6 +498,361 @@
     z-index: 1;
   }
 
+  /* ---- Forms ---------------------------------------------------------- */
+  /*
+     The settings page had no form vocabulary at all, so every control carried
+     its own six-property `style="..."` — the same six, copied, on the timezone
+     select, the concurrency input, the API key and the model. Four places that
+     each believe they define what an input looks like is the F-24 bug this
+     file's header describes, and it had already drifted: two of them had a
+     different border radius from the other two.
+
+     `.field` above is not this. That one is a filter control — a pill in a
+     filter bar, 38px, uppercase label inside it. This is a form control with a
+     label above it and a hint below, which is a different shape with different
+     spacing, and conflating them is how the search box ended up looking like a
+     setting.
+  */
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 1.25rem 1.5rem;
+  }
+
+  .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .form-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-1);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .form-label > i { color: var(--ink-3); font-size: 12px; }
+
+  .input {
+    width: 100%;
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 0.6rem 0.875rem;
+    font-size: 13px;
+    color: var(--ink-1);
+    transition: border-color 0.2s ease;
+  }
+  .input:hover { border-color: var(--line-2); }
+  .input:focus { outline: none; border-color: color-mix(in srgb, var(--brand) 55%, transparent); }
+  .input::placeholder { color: var(--ink-3); }
+  .input-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* A unit that belongs to the number, sitting inside the control's border
+     rather than floating beside it. "3" and "hours" are one value, and a
+     suffix outside the box reads as a separate field — which is exactly what
+     happened to the ROI calculator, where `s` beside the input was routinely
+     mistaken for a button. */
+  .input-affix {
+    display: flex;
+    align-items: center;
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    transition: border-color 0.2s ease;
+    min-width: 0;
+  }
+  .input-affix:hover { border-color: var(--line-2); }
+  .input-affix:focus-within { border-color: color-mix(in srgb, var(--brand) 55%, transparent); }
+  .input-affix > .input {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+    min-width: 0;
+  }
+  .input-affix > .input:focus { border-color: transparent; }
+  .input-affix > .affix {
+    flex: none;
+    padding: 0 0.75rem;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .input-affix > .affix:first-child { padding-right: 0; }
+
+  /* The sentence under a control. Not a tooltip: what a setting DOES is not an
+     advanced detail, and hiding it behind a hover is hiding it from touch. */
+  .hint {
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--ink-3);
+  }
+  .hint strong { color: var(--ink-2); font-weight: 600; }
+
+  /* A card's own title block, for cards that are not tables and so have no
+     `.card-head` bar. */
+  .section-head { margin-bottom: 1.25rem; }
+  .section-head > h2 {
+    font-size: 0.9375rem;
+    font-weight: 650;
+    color: var(--ink-1);
+    margin-bottom: 0.25rem;
+  }
+  .section-head > p {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ink-3);
+    max-width: 72ch;
+  }
+
+  /* An aside that is neither a warning nor an error: a fact about the feature
+     the reader has to know before using it. */
+  .note {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 0.875rem;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+  .note > i { color: var(--ink-3); margin-top: 0.15rem; flex: none; }
+  .note-brand {
+    background: var(--brand-dim);
+    border-color: color-mix(in srgb, var(--brand) 28%, transparent);
+  }
+  .note-brand > i { color: var(--brand); }
+
+  /* The footer of a form: a rule, then the buttons, right-aligned, with room
+     for a status line on the left that does not push them around. */
+  .form-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--line);
+  }
+  .form-actions > .form-actions-msg { font-size: 12px; color: var(--ink-3); min-width: 0; }
+  .form-actions > .form-actions-btns { display: flex; gap: 0.5rem; margin-left: auto; }
+
+  /* A save bar that follows a long list down the page.
+     
+     The right padding is not arbitrary and not decoration: the assistant
+     launcher is `position: fixed` at `right: 1.25rem`, 52px across, and a
+     bottom-right action lands underneath it. On the ROI list — 164 rows on the
+     instance this was built against — that put "Save changes" behind the robot
+     for the entire length of the page. 52px + its 20px inset + a gap. */
+  .form-actions.is-sticky {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    background: var(--surface-1);
+    padding-right: 5rem;
+  }
+
+  /* ---- ROI configuration rows ------------------------------------------ */
+  /*
+     The old version of this list set its own colours: `bg-[#171717]`,
+     `text-indigo-400`, `bg-green-900/40`, `bg-gray-700 hover:bg-indigo-600`.
+     None of them appear anywhere else in this dashboard — it was a second
+     design system with one user, and indigo is not even the brand. Everything
+     below is tokens.
+  */
+
+  .roi-row {
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+    transition: border-color 0.2s ease;
+  }
+  .roi-row:hover { border-color: var(--line-2); }
+
+  .roi-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.875rem;
+    padding: 0.75rem 0.875rem;
+  }
+
+  .roi-row-id { min-width: 0; flex: 1 1 16rem; }
+
+  .roi-row-name {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The id is gone from this line. It was `ID: 281VZtHUACXi9tPH` on every row,
+     in a monospace that made it the second most prominent thing there — and
+     nobody configuring time savings is identifying a workflow by its id. What
+     replaced it is the execution counts, which are what you actually need to
+     judge whether a figure is worth setting. */
+  .roi-row-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.375rem;
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
+  .roi-row-inputs {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+  }
+
+  .roi-input { display: flex; flex-direction: column; gap: 0.3rem; }
+  /* Empty on every row but the first — see the note on `row()` in roi_config.js.
+     It keeps its box so the controls stay aligned down the column; a label that
+     collapses on row two would step every input under it up by 15px. */
+  .roi-input-label {
+    display: block;
+    min-height: 13px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+  }
+  .roi-input .input-affix { height: 34px; }
+  .roi-input .input { padding: 0 0.5rem; width: 5.5rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .roi-input .affix { padding: 0 0.5rem; font-size: 11px; }
+
+  /* Where an applied calculation lands. The reader's eyes are on the result
+     panel when they press the button, so the destination has to say that it
+     changed — otherwise the number appears in a control nobody was watching. */
+  .roi-row .input.is-applied {
+    animation: roi-applied 0.9s ease;
+  }
+  @keyframes roi-applied {
+    0%   { background: color-mix(in srgb, var(--good-mark) 40%, transparent); }
+    100% { background: transparent; }
+  }
+
+  /* ---- The calculator --------------------------------------------------- */
+
+  .roi-calc {
+    border-top: 1px solid var(--line);
+    padding: 1rem 0.875rem;
+    background: color-mix(in srgb, var(--surface-0) 55%, transparent);
+    border-radius: 0 0 var(--r-md) var(--r-md);
+  }
+
+  .roi-calc-lead {
+    font-size: 12px;
+    color: var(--ink-2);
+    margin-bottom: 0.75rem;
+  }
+
+  /* The inputs sit inside a sentence, because a sentence is a claim somebody
+     can check against their memory and four fields called Freq / Per /
+     Duration / Unit are not. `align-items: baseline` is what keeps the prose
+     and the controls on one reading line as it wraps. */
+  .roi-sentence {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    font-size: 13px;
+    color: var(--ink-1);
+    line-height: 2;
+  }
+
+  .roi-calc-field { height: 32px; }
+  .roi-calc-field > .input {
+    padding: 0 0.5rem;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .roi-calc-field > input.input { width: 3.5rem; }
+  .roi-calc-field > select.input { width: auto; padding-right: 1.5rem; cursor: pointer; }
+
+  /* ---- The working, shown before the button ----------------------------- */
+  /*
+     The old calculator put its answer behind "Apply Calculated Value" — a
+     button asking you to trust arithmetic you had not seen, landing a number in
+     a control several inches away. Every step is on screen now, live, so the
+     button confirms rather than reveals.
+  */
+
+  .roi-working { margin-top: 0.875rem; }
+
+  .roi-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 12px;
+    color: var(--ink-2);
+    padding-bottom: 0.75rem;
+    border-bottom: 1px dashed var(--line-2);
+  }
+  .roi-steps > div { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .roi-steps dt { color: var(--ink-3); flex: none; }
+  .roi-steps dd { color: var(--ink-2); }
+  .roi-steps strong { color: var(--ink-1); font-weight: 600; }
+
+  .roi-result {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+  }
+  .roi-result-value {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--ink-1);
+    font-variant-numeric: tabular-nums;
+  }
+  .roi-result-alt { font-size: 12px; font-weight: 500; color: var(--ink-3); }
+
+  /* Not an error — the inputs are fine and the workflow simply has no volume to
+     divide across. It says so instead of dividing by one, which is what the
+     previous version did: a month of human work attributed to a single
+     execution, silently, in the tens of thousands of seconds. */
+  .roi-working-blocked {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--ink-3);
+    padding-top: 0.5rem;
+  }
+  .roi-working-blocked > i { color: var(--warning-ink); margin-top: 0.15rem; flex: none; }
+
+  @media (max-width: 640px) {
+    .roi-row-inputs { width: 100%; }
+    .roi-input { flex: 1 1 8rem; }
+    .roi-input .input { width: 100%; }
+    .roi-row-inputs > .btn { flex: 1 1 100%; justify-content: center; }
+  }
+
   /* ---- Empty and loading are different states ------------------------- */
   /*
      F-24 §1: "empty ≠ zero" and "a distinct loading state, not the same as
@@ -547,7 +924,12 @@
   .shell {
     display: grid;
     grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    /* `100dvh`, with `100vh` underneath it for anything that does not know the
+       unit. On a phone `100vh` is measured against the viewport with the URL
+       bar RETRACTED — so a shell sized by it is always taller than what is on
+       screen, and every page begins with a scrollbar it did not earn. */
     min-height: 100vh;
+    min-height: 100dvh;
     transition: grid-template-columns 0.22s ease;
   }
   .shell[data-collapsed="true"] { grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr); }
@@ -560,6 +942,7 @@
     position: sticky;
     top: 0;
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
   }
 
@@ -655,7 +1038,9 @@
       position: fixed;
       inset-block: 0;
       inset-inline-start: 0;
-      width: var(--sidebar-w);
+      /* Never the whole screen. At 236px on a 320px phone the scrim is an 84px
+         strip, and the scrim is the tap target that closes this. */
+      width: min(var(--sidebar-w), 82vw);
       z-index: 60;
       transform: translateX(-100%);
       transition: transform 0.22s ease;
@@ -677,6 +1062,18 @@
   }
   .shell[data-drawer="open"] .nav-scrim { opacity: 1; pointer-events: auto; }
   @media (min-width: 1024px) { .nav-scrim { display: none; } }
+
+  /*
+     The launcher goes while the drawer is out.
+
+     It is `z-index: 60` — deliberately, so it sits above the page and below the
+     assistant's own sheet — and the scrim is 55, so the one control that was
+     still lit and still tappable over a dimmed page was the one that opens a
+     second overlay on top of the first. The sheet already hides it for the same
+     reason; the drawer is the same claim about the same screen.
+  */
+  .shell[data-drawer="open"] ~ .assistant-launcher,
+  body:has(.shell[data-drawer="open"]) .assistant-launcher { display: none; }
 
   /* ---- Collapse handle -------------------------------------------------- */
   /*
@@ -767,30 +1164,1105 @@
 
   /* ---- Chat markdown --------------------------------------------------- */
 
+  /* Tables read like the application's own tables, because they are describing
+     the same numbers. What they had instead was a grid of 1px boxes over a black
+     wash at 11px — a spreadsheet, in a paragraph's worth of width.
+
+     Three things carried over from `.tbl`: hairlines BETWEEN rows and nowhere
+     else, a header that is a micro-label rather than a coloured band, and
+     numbers right-aligned in tabular figures so a column can be compared by
+     running an eye down it. */
   .prose-chat table {
     display: block;
-    width: 100%;
+    width: max-content;
+    max-width: 100%;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 11px;
-    background: rgba(0, 0, 0, 0.2);
+    margin: 0.75rem 0;
+    font-size: 0.92em;
+    background: var(--surface-0);
+    border: 1px solid var(--line);
     border-radius: var(--r-md);
   }
+  .prose-chat thead { background: var(--surface-2); }
   .prose-chat th {
-    background: color-mix(in srgb, var(--series-7) 12%, transparent);
-    padding: 8px;
-    border: 1px solid var(--line);
+    padding: 7px 10px;
     text-align: left;
-    color: var(--series-7);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
     white-space: nowrap;
+    border-bottom: 1px solid var(--line);
   }
-  .prose-chat td { padding: 8px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
+  .prose-chat td {
+    padding: 7px 10px;
+    color: var(--ink-2);
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  .prose-chat tr:last-child td { border-bottom: none; }
+  /* The first column is the label and is allowed to wrap; everything else is a
+     value and must not, or a number breaks across two lines. */
+  .prose-chat td:first-child { color: var(--ink-1); min-width: 8ch; }
+  .prose-chat td:not(:first-child) { white-space: nowrap; }
+  /* Applied by logic/chat/render.js when a column is numeric all the way down. */
+  .prose-chat th.md-num, .prose-chat td.md-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .prose-chat td.md-num { color: var(--ink-1); }
   .prose-chat strong { color: var(--ink-1); font-weight: 600; }
   .prose-chat ul { list-style-type: disc; margin-left: 1.5rem; margin-block: 0.5rem; }
   .prose-chat p { margin-bottom: 0.75rem; }
   .prose-chat p:last-child { margin-bottom: 0; }
+  .prose-chat h1, .prose-chat h2, .prose-chat h3, .prose-chat h4 {
+    color: var(--ink-1);
+    font-weight: 700;
+    font-size: 1em;
+    margin: 1rem 0 0.4rem;
+  }
+  .prose-chat h1:first-child, .prose-chat h2:first-child, .prose-chat h3:first-child { margin-top: 0; }
+  .prose-chat ol { list-style-type: decimal; margin-left: 1.5rem; margin-block: 0.5rem; }
+  .prose-chat li { margin-block: 0.15rem; }
+  .prose-chat blockquote {
+    border-left: 2px solid var(--line-2);
+    padding-left: 0.75rem;
+    color: var(--ink-2);
+    margin-block: 0.5rem;
+  }
+  .prose-chat hr { border: 0; border-top: 1px solid var(--line); margin: 1rem 0; }
+  .prose-chat a {
+    color: var(--brand);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .prose-chat a:hover { text-decoration-thickness: 2px; }
+  .prose-chat img { max-width: 100%; border-radius: var(--r-sm); margin-block: 0.5rem; }
+  /* An image we refused to load leaves its caption behind, so a sentence that
+     refers to a figure does not refer to nothing. See logic/chat/render.js. */
+  .md-dropped-image {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--ink-3);
+    border: 1px dashed var(--line-2);
+    border-radius: var(--r-sm);
+    padding: 2px 6px;
+  }
+
+  /* =======================================================================
+     THE ASSISTANT
+     =======================================================================
+
+     Rebuilt on the token layer. The old widget was the one component in the
+     application that was not: `bg-indigo-600`, `bg-n8n-dark`, a hardcoded
+     `#1a0c09` on a brand fill. That is the whole reason it read as pasted in
+     from somewhere else — it was.
+
+     Three rules it now obeys that it did not before.
+
+     1. BRAND IS IDENTITY. The launcher is brand because the launcher IS the
+        assistant. The user's own messages are not: they sit on `--surface-2`,
+        the same raised plane a table header uses. A brand-filled bubble was a
+        loud orange block for content the reader wrote themselves.
+
+     2. THE ASSISTANT'S ANSWER IS NOT IN A BUBBLE. In a 420px panel a bubble
+        costs about 60px of width to a table that already has none, and there is
+        no ambiguity to resolve — one side of the conversation is right-aligned
+        and the other is the whole column.
+
+     3. SYNTAX COLOURS COME FROM THE SERIES RAMP. Highlighting is categorical
+        encoding — keyword, string, number, comment are categories — so the
+        palette validated for categories is the correct one. It also means the
+        code in an answer is CVD-separable, which no stock highlighter theme is.
+     ======================================================================= */
+
+  /* ---- reading size --------------------------------------------------- */
+  /* One declaration, two shells. The panel and the full page want different
+     reading sizes and nothing else, and the old way of saying that — a
+     `compact` flag that swapped a Tailwind class on every bubble — put the
+     decision in the JS that builds messages, where it could differ per message
+     type. It is a property of the container now, because that is what it is.
+
+     12px was too small. The panel is a place people read paragraphs and tables,
+     not a tooltip. */
+  .assistant-panel { --chat-fs: 13.5px; --chat-lh: 1.62; }
+  .assistant-page  { --chat-fs: 15px;   --chat-lh: 1.7; }
+
+  /* ---- launcher ------------------------------------------------------- */
+  .assistant-launcher {
+    position: fixed;
+    right: 1.25rem;
+    /* The inset LIFTS the button; it used to be `padding-bottom` on a 52px flex
+       circle, which left the button where it was and pushed the icon off its
+       own centre instead. */
+    bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+    /* Below a mobile sheet, above everything else. */
+    z-index: 60;
+    width: 52px;
+    height: 52px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--brand);
+    color: #17110f;
+    border: none;
+    font-size: 19px;
+    box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .assistant-launcher:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.7); }
+  .assistant-launcher:active { transform: translateY(0); }
+  /* An unread answer that finished while the panel was shut. */
+  .assistant-launcher .dot {
+    position: absolute;
+    top: 2px; right: 2px;
+    width: 12px; height: 12px;
+    border-radius: 999px;
+    background: var(--good-mark);
+    border: 2px solid var(--surface-0);
+  }
+
+  /* ---- panel ---------------------------------------------------------- */
+  .assistant-panel {
+    position: fixed;
+    right: 1.25rem;
+    bottom: calc(1.25rem + 52px + 0.75rem);
+    z-index: 70;
+    width: 420px;
+    height: min(660px, calc(100dvh - 8rem));
+    min-width: 320px;
+    /* The floor is itself capped by the viewport. A flat `380px` beat the
+       `height` above on any window shorter than about 508px — a phone held
+       sideways — and the panel grew UP out of the top of the screen, taking its
+       header, its close button and its conversation switcher with it. */
+    min-height: min(380px, calc(100dvh - 8rem));
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.75);
+    overflow: hidden;
+    transform-origin: bottom right;
+  }
+  .assistant-panel[hidden] { display: none; }
+  /* Opening is a scale and a fade, not a slide across the viewport: the panel
+     belongs to the launcher and should look like it came out of it. */
+  .assistant-panel.is-entering {
+    animation: assistant-in 0.16s ease-out;
+  }
+  @keyframes assistant-in {
+    from { opacity: 0; transform: scale(0.96) translateY(6px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  .assistant-head {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-1);
+    flex-shrink: 0;
+  }
+  .assistant-thread {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    flex: 1;
+    padding: 3px 6px 3px 3px;
+    border-radius: 999px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--ink-1);
+    text-align: left;
+  }
+  .assistant-thread:hover { background: var(--surface-2); border-color: var(--line); }
+  .assistant-thread[aria-expanded="true"] { background: var(--surface-2); border-color: var(--line-2); }
+  .assistant-thread .thread-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .assistant-thread > i:last-child { font-size: 9px; color: var(--ink-3); flex-shrink: 0; }
+
+  /* The thread list hangs BELOW the header rather than above the composer, so
+     it opens next to the control that opened it. */
+  #assistantThreads {
+    top: calc(100% + 0.25rem);
+    bottom: auto;
+    left: 0.5rem;
+    right: 0.5rem;
+  }
+
+  .assistant-head .title { font-size: 13px; font-weight: 700; color: var(--ink-1); }
+  .assistant-head .sub { font-size: 10px; color: var(--ink-3); }
+  .assistant-head-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+  .assistant-icon-btn {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+    background: transparent;
+    border: none;
+    font-size: 13px;
+  }
+  .assistant-icon-btn:hover { background: var(--surface-3); color: var(--ink-1); }
+  /* A finger is not a pointer. Everything tappable clears 44px on touch. */
+  @media (pointer: coarse) {
+    .assistant-icon-btn { width: 44px; height: 44px; }
+  }
+
+  /* The conversation sits on the page plane so the composer and header, which
+     are on the card plane, read as chrome around it. */
+  .assistant-log {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--surface-0);
+    padding: 0.875rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) { .assistant-log { scroll-behavior: auto; } }
+
+  .assistant-foot {
+    flex-shrink: 0;
+    padding: 0.625rem 0.75rem calc(0.625rem + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--surface-1);
+  }
+
+  /* ---- mobile: a sheet, and an honest one ------------------------------
+     Full screen, so it really does block the page — which is the one case where
+     `aria-modal="true"` is true rather than decorative. The launcher hides
+     underneath it; the close button in the header is the way out. */
+  /*
+     The sheet is for a viewport the dock cannot float in — narrow OR short.
+
+     `max-height` is not redundant with `max-width`: a phone held sideways is
+     844x390, which is nowhere near narrow and has nothing like the 660px of
+     height the dock wants. It used to get the dock, positioned 84px off the
+     bottom of a 390px screen and 380px tall, which put its header — and its
+     close button — above the top edge.
+
+     panel.js matches on the same query, because the scroll lock, the focus trap
+     and `aria-modal` are all claims about whether this thing covers the page.
+     Two definitions of "mobile" would eventually disagree about that.
+  */
+  @media (max-width: 640px), (max-height: 480px) {
+    /*
+      The sheet is pinned, and it is pinned by NOT being given a height.
+
+      `position: fixed` with all four insets at 0 fills the layout viewport.
+      That is the box that stays still: it does not move when the browser's URL
+      bar slides away, and it DOES shrink when the keyboard opens, because the
+      `interactive-widget=resizes-content` directive in every page's viewport
+      meta is a statement about the layout viewport.
+
+      Both of the heights that used to be here moved on both events, which is
+      the bug this replaces — the sheet resized when you started typing and
+      resized again when you stopped, and resized a third time whenever the URL
+      bar hid itself on a scroll:
+
+        · `100dvh` is DYNAMIC by definition. It tracks the URL bar. For a
+          full-screen fixed overlay that is never what is wanted — the overlay
+          is not what the URL bar is overlapping.
+        · `--app-vh`, from `visualViewport`, tracked the URL bar as well AND was
+          written on `visualViewport`'s `scroll` event, so a scroll wrote a
+          height, the height changed the layout, and the layout scrolled.
+
+      What it cost: on iOS, where `interactive-widget` is not implemented, the
+      layout viewport does not shrink for the keyboard, so the composer ends up
+      behind it. Safari's own answer to that is to shift the visual viewport up
+      until the focused field is visible, which it does here — the sheet stays
+      exactly the size it was and the top of it goes off screen. A surface that
+      holds still and scrolls out of the way is worth more than one that is
+      always the right height and is never still. The close button in the header
+      is the way out, and it does not move either.
+    */
+    .assistant-panel {
+      inset: 0;
+      width: auto;
+      height: auto;
+      /* The dock's floor and ceiling are about a floating panel, and this is
+         not one. Left in, `min-height` would hold the sheet taller than a
+         keyboard leaves room for. */
+      min-width: 0;
+      min-height: 0;
+      max-height: none;
+      border-radius: 0;
+      border: none;
+      transform-origin: bottom center;
+      /*
+        A sheet that covers the viewport is not a 420px dock any more, and the
+        reading size is a property of the container for exactly this reason —
+        13.5px was chosen against a narrow column beside a page, and this is a
+        page. One declaration, because the size was made a token rather than a
+        flag on every message.
+      */
+      --chat-fs: 15px;
+      --chat-lh: 1.68;
+    }
+    .assistant-panel.is-open ~ .assistant-launcher,
+    body:has(.assistant-panel.is-open) .assistant-launcher { display: none; }
+    .assistant-resize { display: none; }
+
+    /* Above the composer, and the composer is at the bottom of the screen —
+       so on a short viewport with a keyboard open the menu is what has to
+       give, not the field it belongs to. */
+    .tag-menu { max-height: min(260px, 42dvh); }
+  }
+
+  /* The desktop-only grip. Hidden from assistive tech: it is a convenience with
+     a keyboard-reachable equivalent (the panel has a size preference), not a
+     control anyone must be able to reach. */
+  .assistant-resize {
+    position: absolute;
+    top: 0; left: 0;
+    width: 18px; height: 18px;
+    cursor: nwse-resize;
+    z-index: 2;
+  }
+  .assistant-resize::after {
+    content: "";
+    position: absolute;
+    top: 6px; left: 6px;
+    width: 5px; height: 5px;
+    border-top: 2px solid var(--line-2);
+    border-left: 2px solid var(--line-2);
+    border-radius: 1px;
+  }
+
+  /* ---- one exchange ---------------------------------------------------- */
+  .msg { display: flex; gap: 0.625rem; align-items: flex-start; }
+  .msg-user { justify-content: flex-end; }
+  .msg-body { font-size: var(--chat-fs, 13.5px); line-height: var(--chat-lh, 1.62); }
+  .msg-user .msg-body {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    border-bottom-right-radius: 5px;
+    padding: 0.5rem 0.8rem;
+    max-width: 86%;
+    color: var(--ink-1);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  /* The assistant gets the column. See rule 2 above. */
+  .msg-ai .msg-body { flex: 1; min-width: 0; color: var(--ink-2); }
+  .msg-avatar {
+    width: 26px; height: 26px;
+    flex-shrink: 0;
+    border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    background: var(--brand-dim);
+    color: var(--brand);
+    border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent);
+    margin-top: 1px;
+  }
+  .msg-error .msg-avatar {
+    background: color-mix(in srgb, var(--critical-mark) 16%, transparent);
+    color: var(--critical-ink);
+    border-color: color-mix(in srgb, var(--critical-mark) 35%, transparent);
+  }
+  .msg-error .msg-body { color: var(--critical-ink); }
+
+  /* ---- what the assistant did ------------------------------------------ */
+  .assistant-steps { margin-top: 0.625rem; }
+  .assistant-steps summary {
+    cursor: pointer;
+    user-select: none;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .assistant-steps summary:hover { color: var(--ink-2); }
+  .assistant-steps ul { margin-top: 0.4rem; font-size: 11px; }
+  .assistant-steps li { display: flex; gap: 0.4rem; align-items: flex-start; padding: 1px 0; color: var(--ink-2); }
+  .assistant-steps li.failed { color: var(--critical-ink); }
+  .assistant-steps .detail { color: var(--ink-3); }
+
+  .assistant-live {
+    display: flex; align-items: center; gap: 0.45rem;
+    font-size: 11px; color: var(--ink-3);
+    padding: 2px 0;
+  }
+
+  /* ---- code ------------------------------------------------------------ */
+  .prose-chat code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+  }
+  /* Inline code is separated by MATERIAL, not by hue. A colour here would have
+     to be a series slot or a status slot, and it is neither of those things. */
+  :not(pre) > .prose-chat code, .prose-chat :not(pre) > code {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+    color: var(--ink-1);
+  }
+  .code-block {
+    margin-block: 0.625rem;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    background: var(--surface-0);
+  }
+  .code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem 0.3rem 0.625rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .code-lang {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .code-copy {
+    font-size: 10px;
+    color: var(--ink-3);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    padding: 3px 7px;
+  }
+  .code-copy:hover { color: var(--ink-1); border-color: var(--line-2); }
+  .code-copy.is-done { color: var(--good-ink); border-color: transparent; }
+  .code-block pre {
+    margin: 0;
+    padding: 0.625rem;
+    overflow-x: auto;
+    /* Code wraps badly and reads worse. It scrolls, inside its own box, and
+       never widens the panel. */
+    white-space: pre;
+  }
+  .code-block pre code { color: var(--ink-1); line-height: 1.55; }
+
+  /* Syntax, on the validated categorical ramp. */
+  .hljs-keyword, .hljs-selector-tag, .hljs-literal { color: var(--series-7); }
+  .hljs-string, .hljs-regexp, .hljs-meta .hljs-string { color: var(--series-3); }
+  .hljs-number, .hljs-symbol, .hljs-bullet { color: var(--series-4); }
+  .hljs-built_in, .hljs-title, .hljs-title.function_, .hljs-section { color: var(--series-1); }
+  .hljs-attr, .hljs-attribute, .hljs-property, .hljs-variable { color: var(--series-5); }
+  .hljs-type, .hljs-class .hljs-title, .hljs-params { color: var(--series-2); }
+  .hljs-comment, .hljs-quote, .hljs-meta { color: var(--ink-3); font-style: italic; }
+  .hljs-operator, .hljs-punctuation { color: var(--ink-2); }
+  .hljs-deletion { color: var(--critical-ink); }
+  .hljs-addition { color: var(--good-ink); }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 700; }
+
+  /* ---- composer -------------------------------------------------------- */
+  /* One field, not a textarea with a toolbar stuck underneath it. The whole box
+     is the input: it takes the focus ring, the buttons sit inside it, and the
+     row of controls is separated by air rather than by a rule — a border there
+     made the composer read as two stacked widgets. */
+  .assistant-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    background: var(--surface-0);
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    padding: 0.55rem 0.55rem 0.4rem 0.8rem;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .assistant-composer:focus-within {
+    border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent);
+  }
+  .assistant-composer textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    resize: none;
+    color: var(--ink-1);
+    font-size: var(--chat-fs, 13.5px);
+    line-height: 1.5;
+    max-height: 8rem;
+    padding: 0.1rem 0;
+  }
+  .assistant-composer textarea:focus { outline: none; }
+  .assistant-composer textarea::placeholder { color: var(--ink-3); }
+  .assistant-composer-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 30px;
+  }
+  /* The keyboard hint occupies the space the row would otherwise waste, and it
+     is the only place the `@` syntax is ever explained. */
+  .assistant-hint {
+    font-size: 10px;
+    color: var(--ink-3);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .assistant-hint kbd {
+    font-family: inherit;
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+  .assistant-send {
+    margin-left: auto;
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--brand);
+    color: #17110f;
+    border: none;
+    font-size: 11px;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+  .assistant-send:hover:not(:disabled) { transform: translateY(-1px); }
+  /* Empty box, dimmed button. The state of the send button IS the validation
+     message, so there is no error to show for a question nobody typed. */
+  .assistant-send:disabled { opacity: 0.3; }
+  .assistant-stop {
+    margin-left: auto;
+    height: 30px;
+    padding: 0 0.7rem;
+    border-radius: 9px;
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 11px;
+    color: var(--ink-1);
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+  }
+  .assistant-stop:hover { background: var(--surface-3); }
+  /* Auto-scrolling someone who has deliberately scrolled up is taking the page
+     away from them. When they are not at the bottom, the panel stops following
+     the answer and offers this instead. */
+  .assistant-jump {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0 auto 0.5rem;
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--ink-1);
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+  }
+  .assistant-jump[hidden] { display: none; }
+  .assistant-jump:hover { background: var(--surface-3); }
+
+  .assistant-foot .note {
+    margin-top: 0.4rem;
+    font-size: 9px;
+    color: var(--ink-3);
+    text-align: center;
+  }
+
+  /* ---- tags ------------------------------------------------------------ */
+  /* A tag in the text and a tag on screen are the same object at two zoom
+     levels: the textarea holds `@workflow:<id>`, the strip above it holds the
+     name, because an id is not a thing anybody recognises. */
+  .tag-strip { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+  /* A chip is a pill with an icon, not a word with a word in front of it. The
+     category used to be spelled out — "workflow CallCenterPerMinute" — which
+     doubled the width of every chip to say something the icon says at a glance
+     and the dropdown has already established. The word survives as the
+     accessible name. */
+  .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 100%;
+    font-size: 11.5px;
+    line-height: 1.45;
+    padding: 3px 8px 3px 6px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+    color: var(--ink-1);
+  }
+  .tag-chip > i:first-child { font-size: 9px; color: var(--ink-3); width: 11px; text-align: center; }
+  .tag-chip .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag-chip .kind { display: none; }
+  .tag-chip button {
+    width: 15px; height: 15px;
+    border-radius: 999px;
+    font-size: 8px;
+    color: var(--ink-3);
+    background: transparent;
+    border: none;
+    margin-left: 1px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .tag-chip button:hover { background: var(--surface-3); color: var(--ink-1); }
+  .tag-chip.is-tool {
+    border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+    background: var(--brand-dim);
+    color: var(--brand);
+  }
+  .tag-chip.is-tool > i:first-child { color: var(--brand); }
+  /* Rejected is not signalled by colour alone — there is an icon, and the reason
+     is in the title attribute. */
+  .tag-chip.is-rejected {
+    border-color: color-mix(in srgb, var(--critical-mark) 50%, transparent);
+    background: color-mix(in srgb, var(--critical-mark) 10%, transparent);
+    color: var(--critical-ink);
+  }
+  .tag-chip.is-rejected > i:first-child { color: var(--critical-ink); }
+  .tag-chip.is-rejected .name { text-decoration: line-through; }
+  /* The suggested questions on an empty conversation are chips too, but they
+     are actions, so they get the affordances of one. */
+  .tag-chip.is-suggestion {
+    cursor: pointer;
+    padding: 5px 11px;
+    color: var(--ink-2);
+    background: transparent;
+  }
+  .tag-chip.is-suggestion:hover { background: var(--surface-2); color: var(--ink-1); }
+
+  .tag-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 0.4rem);
+    z-index: 5;
+    max-height: 260px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--surface-2);
+    border: 1px solid var(--line-2);
+    border-radius: 12px;
+    box-shadow: 0 18px 44px -14px rgba(0, 0, 0, 0.85);
+    padding: 0.3rem;
+  }
+  .tag-menu[hidden] { display: none; }
+  /* A heading, because a popover that appears with no title is a popover people
+     read twice. */
+  .tag-menu-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.3rem 0.5rem 0.4rem;
+    font-size: 9.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .tag-option {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.45rem 0.5rem;
+    border-radius: 8px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+    background: transparent;
+    border: none;
+  }
+  /* A fixed-width icon rather than a fixed-width word. The category label used
+     to be a 58px column of uppercase text in front of every row, which is most
+     of a narrow panel spent on saying "workflow" eight times. */
+  .tag-option > i:first-child {
+    width: 14px;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--ink-3);
+    text-align: center;
+  }
+  .tag-option .kind { display: none; }
+  .tag-option .name {
+    color: var(--ink-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The disambiguator, and the reason it is on screen: two error groups on this
+     instance are both called `call_center`, and only this column separates
+     them. */
+  .tag-option .detail {
+    margin-left: auto;
+    padding-left: 0.5rem;
+    font-size: 10px;
+    color: var(--ink-3);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .tag-option[aria-selected="true"], .tag-option:hover {
+    background: var(--surface-3);
+    color: var(--ink-1);
+  }
+  .tag-option[aria-selected="true"] > i:first-child { color: var(--brand); }
+  .tag-option[aria-checked="true"] > i:first-child { color: var(--brand); }
+  .tag-menu-empty {
+    padding: 0.45rem 0.5rem;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink-3);
+  }
+  .tag-menu-note {
+    margin-top: 0.2rem;
+    padding: 0.45rem 0.5rem 0.25rem;
+    border-top: 1px solid var(--line);
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--ink-3);
+  }
+
+  /* ---- A page that ends where the screen does --------------------------- */
+  /*
+     Opted into with `data-fill` on the body, and used by exactly one page: the
+     full-page conversation, whose content is a single panel that should reach
+     the bottom of the viewport and stop there.
+
+     It replaces a magic number. `height: calc(100dvh - 190px)` on that card was
+     the measured height of everything above it — taken once, on a desktop — and
+     it was wrong on a phone in both directions at the same time. The title wraps
+     at 390px, so the card starts lower while still being told to be the same
+     height, which pushed the composer below the fold; and wherever the header
+     came out shorter than the guess, the page ended in a band of empty card.
+
+     `min-height: 0` on the flex children is the part that is easy to leave out
+     and does nothing visible until it matters: a flex item's default
+     `min-height: auto` refuses to shrink below its content, so the log inside
+     would grow the panel past the viewport rather than scrolling within it, and
+     the composer would go with it.
+  */
+  /*
+     `height`, not `min-height`. This is the declaration the whole thing turns
+     on: `flex: 1` distributes FREE space, and a column with no definite height
+     has none to distribute — so the log inside grew to the height of the
+     conversation (7,065px on a thread of any length), took the card and the
+     page with it, and scrolled the document instead of itself. The rail beside
+     it is already pinned at exactly this height.
+  */
+  body[data-fill] .shell-main {
+    display: flex;
+    flex-direction: column;
+    /*
+      `svh`, not `dvh`. The SMALL viewport height is the one measured with the
+      browser's UI showing, and it is a constant — where `dvh` is dynamic by
+      definition and changes every time the URL bar slides in or out, which on a
+      phone resized this whole column, and the conversation inside it, on a
+      gesture that has nothing to do with the conversation.
+
+      Nothing is lost by using the smaller number: this page is sized to fit
+      exactly and never scrolls, so the URL bar has no scroll to hide on. The
+      keyboard still shortens it, because `interactive-widget=resizes-content`
+      shrinks the viewport these units resolve against.
+    */
+    height: 100vh;
+    height: 100svh;
+    min-height: 0;
+  }
+  .page-fill {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+  /* A floor, not a size — and a low one. Anything taller would be a number
+     guessed against a viewport again, and it would be wrong first on a phone
+     held sideways. */
+  .chat-shell {
+    flex: 1;
+    min-height: 14rem;
+  }
+
+  /* ---- Tab strip -------------------------------------------------------- */
+  /*
+     Four pages carry a row of tabs, and all four wrote it as a bare `flex` with
+     the divider as an inline style. Below `sm` that row does not fit: on
+     Settings its five tabs wrapped onto three lines, which puts the selected
+     underline in the first row while the tab you are about to press is in the
+     third — the highlight stops reading as "you are here" and starts reading as
+     decoration on an unrelated row.
+
+     A tab bar that does not fit scrolls. It is the one navigation pattern where
+     that is expected rather than surprising: the strip visibly runs off the
+     edge, and the tab that is selected is scrolled into view by the code that
+     selects it.
+  */
+  .tabs {
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  /* `flex: none` — without it the tabs share the row by shrinking, which is the
+     wrapping problem again with the words broken instead of the row. */
+  .tabs > .tab-btn { flex: none; white-space: nowrap; }
+  /*
+     And a sign that there is more of it. Without this a strip that runs off the
+     edge looks exactly like a strip that ends there, and "Cost & time" is a tab
+     nobody knows about. Two `local` covers that travel with the content and two
+     `scroll` shadows pinned to the box, so a shadow shows on whichever side has
+     tabs off-screen and on neither side when they all fit.
+  */
+  .tabs {
+    background-image:
+      linear-gradient(to right, var(--surface-1), transparent 24px),
+      linear-gradient(to left, var(--surface-1), transparent 24px),
+      linear-gradient(to right, rgba(0, 0, 0, 0.45), transparent 12px),
+      linear-gradient(to left, rgba(0, 0, 0, 0.45), transparent 12px);
+    background-position: left center, right center, left center, right center;
+    background-repeat: no-repeat;
+    background-size: 24px 100%, 24px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  /* ---- A box that scrolls sideways -------------------------------------- */
+  /*
+     The named version of the `overflow-x-auto` repeated on a dozen wrappers. It
+     exists so the rule further down has something to attach to: the point is not
+     the scrolling, it is that the TABLE inside keeps a width its columns can
+     live in.
+  */
+  .scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* =======================================================================
+     Narrow screens.
+
+     One idea, and the reason there is not more of it: the layout already held up
+     at 390px — no page scrolls sideways, which was measured before any of this
+     was written — but it held up by SQUEEZING, and a squeezed dashboard is not a
+     legible one. What follows spends the width differently. It moves nothing.
+
+     Two related blocks follow this one and are keyed differently on purpose: the
+     touch rules go by pointer, because a finger does not arrive at a particular
+     width, and the launcher rules go by narrow-or-short, because a phone held
+     sideways has that problem too.
+     ======================================================================= */
+
+  @media (max-width: 640px) {
+
+    .shell-main { padding: 0.875rem; }
+
+    /* Cards give back the padding a 1440px column could afford. */
+    .card-pad { padding: 1rem; }
+    .kpi { padding: 1rem; }
+    .card-head { padding: 0.75rem 1rem; }
+
+    /* The hero number scales with the viewport instead of overflowing it.
+       "30d 21h 2m" and "$4,086.50" both sat a hair from the edge at 30px on a
+       390px screen, and one more digit takes them past it. */
+    .kpi-value { font-size: clamp(1.5rem, 7.5vw, 1.875rem); }
+
+    /*
+       One filter per row.
+
+       `.filter-bar` already wrapped, so nothing overflowed — but wrapping put
+       two controls on some rows and one on others, and a control whose width is
+       an accident of what preceded it is a control you have to look for. Each
+       field takes the row. The preset chips stay a group, because they are one
+       control rather than several.
+    */
+    .filter-bar > .field { flex: 1 1 100%; }
+    .filter-bar > [role="group"] { flex-wrap: wrap; }
+
+    /* A field is allowed to be two lines tall. The custom-range field holds a
+       label and two date inputs, and at a tappable font size those do not fit on
+       one 390px row — so they wrap inside the field instead of the field
+       clipping them. */
+    .field {
+      height: auto;
+      min-height: 44px;
+      flex-wrap: wrap;
+      row-gap: 0.25rem;
+      padding-block: 0.35rem;
+    }
+    /* The label goes above what it labels.
+
+       Inline, it is competing for a 390px row with a select or with two native
+       date controls, and the control is the half that loses — the custom-range
+       field wrapped mid-range, leaving an em-dash hanging off the end of the
+       first line with nothing after it. Above, the control gets the row, which
+       is where a form on a phone puts its labels anyway. */
+    .field > .label { flex: 1 1 100%; }
+
+    /* A range's two ends get a row each, and the dash between them goes.
+
+       Two native date controls at 16px are about 145px apiece; with the gaps and
+       the dash that is 12px more than a 390px screen has, so the row wrapped
+       between the dash and the second date and left an em-dash hanging off the
+       end of the first line pointing at nothing. Stacked and full-width they
+       read as the two fields they are, under the one label that already says
+       what they are the range of. */
+    .field input[type="date"] { flex: 1 1 100%; }
+    .field-sep { display: none; }
+
+    /*
+       16px, and it is not a size preference.
+
+       Mobile Safari zooms the page in when a text field smaller than 16px takes
+       focus, and it does not zoom back out afterwards. Every filter on this
+       dashboard is a `select` or a date input at 12px, so the first tap on any
+       of them left the reader on a page a third too wide with no way back except
+       a pinch. The controls are 44px tall here anyway, so the larger text costs
+       nothing.
+    */
+    .field select, .field input,
+    .assistant-composer textarea,
+    input[type="text"], input[type="email"], input[type="password"],
+    input[type="number"], input[type="search"], input[type="date"],
+    select, textarea {
+      font-size: 16px;
+    }
+
+    /*
+       Tables keep their width, and the wrapper scrolls.
+
+       `width: 100%` on a table does not make it narrow, it makes it TALL. The
+       alerts rules table put "The n8n database is heading past a size" into a
+       column 70px wide — two words a line — and the row grew to 250px to hold
+       six of them. Given a width its columns can live in, the same row is one
+       line, and the sideways scroll `.tbl-wrap` has always had does the rest.
+
+       The threshold is the column count, read off the header rather than
+       declared per table: six columns need more than four, and a two-column
+       table needs nothing and keeps not scrolling.
+    */
+    .tbl-wrap > .tbl:has(thead th:nth-child(4)) { min-width: 34rem; }
+    .tbl-wrap > .tbl:has(thead th:nth-child(6)) { min-width: 44rem; }
+    .scroll-x > table { min-width: 32rem; }
+
+    /* And a floor per column, which is where the table's own intrinsic width
+       comes from once there are more columns than the steps above anticipated.
+       `:not([style])` skips the columns that declared a width in the markup —
+       a 32px chevron and a 44px toggle are narrow on purpose, and giving them
+       88px would spend the scroll budget on two columns holding one glyph
+       each. */
+    .tbl th:not([style]) { min-width: 5.5rem; }
+
+    .tbl thead th { padding: 0.625rem 0.75rem; }
+    .tbl tbody td { padding: 0.625rem 0.75rem; }
+
+    /*
+       And a sign that it scrolls, because a table that scrolls and does not look
+       like it is a table with columns nobody finds.
+
+       Two gradient pairs, the CSS-only version. The covers are
+       `background-attachment: local`, so they travel with the content and slide
+       away from the edge they are parked at; the shadows are `scroll`, so they
+       stay pinned to the box. A shadow is therefore showing on exactly the side
+       that has content off-screen — with no scroll listener, and nothing to keep
+       in sync.
+    */
+    .tbl-wrap, .scroll-x {
+      background-image:
+        linear-gradient(to right, var(--surface-1), transparent 28px),
+        linear-gradient(to left, var(--surface-1), transparent 28px),
+        linear-gradient(to right, rgba(0, 0, 0, 0.45), transparent 14px),
+        linear-gradient(to left, rgba(0, 0, 0, 0.45), transparent 14px);
+      background-position: left center, right center, left center, right center;
+      background-repeat: no-repeat;
+      background-size: 28px 100%, 28px 100%, 14px 100%, 14px 100%;
+      background-attachment: local, local, scroll, scroll;
+    }
+
+  }
+
+  /* =======================================================================
+     A screen the assistant covers.
+
+     The same condition the sheet uses — narrow OR short — because these are all
+     consequences of the same fact: on a screen this size the launcher is a 52px
+     circle floating over the bottom right of whatever is underneath it, and a
+     phone held sideways has that problem as squarely as one held upright.
+     ======================================================================= */
+
+  @media (max-width: 640px), (max-height: 480px) {
+
+    /* The last card on every page ended underneath the launcher. The clearance
+       is the button's height plus its own inset; pages that turn the assistant
+       off do not pay for it. */
+    body:not([data-assistant="off"]) .shell-main {
+      padding-bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
+    }
+
+    /*
+       A row of controls pinned to the bottom of a panel, moved out from under
+       the one pinned to the bottom of the viewport.
+
+       Save settings sits at the bottom right of its own card; the launcher sits
+       at the bottom right of the screen. On a desktop the card is nowhere near
+       the corner and they never meet — at 390px the card IS the width of the
+       screen, and the launcher landed on the word "settings".
+    */
+    body:not([data-assistant="off"]) .sticky-actions {
+      padding-right: calc(52px + 1rem);
+    }
+
+    /* The full-page conversation's footnote. `.label` is an uppercase
+       micro-caption with 0.12em of tracking; three lines of it under the
+       composer is most of what a small screen shows below the fold, for a
+       sentence that is a footnote and reads like a heading. */
+    .assistant-page .disclaimer {
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 10px;
+      font-weight: 400;
+      line-height: 1.45;
+    }
+  }
+
+  /* =======================================================================
+     Touch.
+
+     Keyed off the pointer, not the viewport: 44px is owed to a finger, and a
+     finger is not something that turns up at a particular screen width. The
+     assistant's icon buttons already did this. The rest of the vocabulary did
+     not, so a 30px `.btn-sm` in a card header was a target the size of a coin on
+     every page that has one.
+     ======================================================================= */
+
+  @media (pointer: coarse) {
+    .btn { min-height: 44px; }
+    /* The small button stays small. It sits in header rows beside a title, and
+       44px there pushes that row onto two lines by itself — which is the problem
+       it would be solving, moved. 38px is a third larger than it was. */
+    .btn-sm { min-height: 38px; height: auto; }
+    .chip { height: 44px; }
+    .nav-item { padding-block: 0.75rem; }
+    .tab-btn { min-height: 46px; }
+    .tag-option { min-height: 44px; }
+    .tag-chip button { width: 22px; height: 22px; font-size: 10px; }
+    .assistant-send { width: 40px; height: 40px; font-size: 13px; }
+    .assistant-stop { height: 40px; }
+    .code-copy { min-height: 32px; padding: 6px 10px; }
+  }
 
   .tab-btn.active {
     border-bottom: 2px solid var(--brand);

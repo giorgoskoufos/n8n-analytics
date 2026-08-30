@@ -41,6 +41,7 @@ module.exports = [
                 setTimeout: 'readonly', clearTimeout: 'readonly',
                 setInterval: 'readonly', clearInterval: 'readonly',
                 setImmediate: 'readonly', fetch: 'readonly', URL: 'readonly',
+                URLSearchParams: 'readonly',
                 AbortController: 'readonly', TextEncoder: 'readonly', TextDecoder: 'readonly'
             }
         },
@@ -125,6 +126,15 @@ module.exports = [
                 // the error pages and the alert editor dispatch through.
                 UI: 'writable', Viz: 'writable', ChatCore: 'writable',
                 TextDecoder: 'readonly',
+                // The assistant. `requestAnimationFrame` batches the streamed
+                // deltas, `AbortController` drops a catalogue lookup whose
+                // keystroke has already been superseded, and `hljs` is the
+                // vendored highlighter, loaded on the first code block rather
+                // than on page load.
+                requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly',
+                AbortController: 'readonly', hljs: 'readonly',
+                ChatStore: 'writable', ChatRender: 'writable', ChatTags: 'writable',
+                AssistantPanel: 'writable',
                 openNavDrawer: 'writable', closeNavDrawer: 'writable', toggleNavCollapse: 'writable',
                 openTrace: 'writable', closeTraceModal: 'writable', renderExecutionTrace: 'writable',
                 filterRelabelled: 'writable', clearErrorFilters: 'writable', setErrorRange: 'writable',
@@ -148,12 +158,20 @@ module.exports = [
         }
     },
 
-    // ---- The two ES modules in the browser layer ----
-    // app.js and chat.js are <script type="module">; everything else on those
-    // pages is a classic script. Parsed accordingly, or ESLint rejects the file
-    // outright and stops checking it at all.
+    // ---- The ES modules in the browser layer ----
+    // These are <script type="module"> entry points and the files they import;
+    // everything else on those pages is a classic script. Parsed accordingly, or
+    // ESLint rejects the file outright and stops checking it at all.
+    //
+    // `public/logic/roi/**` is a directory rather than a list because the ROI
+    // page's modules are a set that will grow, and a list is the shape that gets
+    // a new file added to it and forgotten — which does not fail loudly, it just
+    // silently stops linting that file.
     {
-        files: ['public/logic/app.js', 'public/logic/chat.js', 'public/logic/settings.js'],
+        files: [
+            'public/logic/app.js', 'public/logic/chat.js', 'public/logic/settings.js',
+            'public/logic/roi.js', 'public/logic/roi/**/*.js', 'public/logic/roi/**/*.mjs'
+        ],
         languageOptions: { ecmaVersion: 2022, sourceType: 'module' }
     },
 

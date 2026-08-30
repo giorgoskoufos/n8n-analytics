@@ -47,3 +47,8 @@ desktop.ini
 *.swp
 .idea/
 .vscode/
+
+# Recorded eval runs. Real workflow names, real execution ids, real answers —
+# it is a copy of the instance's data wearing a different file extension, and it
+# belongs next to the harness that produced it rather than in the history.
+test/eval/runs/

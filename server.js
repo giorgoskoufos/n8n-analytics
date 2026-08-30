@@ -14,6 +14,8 @@ const { requestLog } = require('./src/middlewares/requestLog');
 const authRoutes = require('./src/routes/authRoutes');
 const metricsRoutes = require('./src/routes/metricsRoutes');
 const aiRoutes = require('./src/routes/aiRoutes');
+const { router: integrationsRoutes, publicRouter: integrationsPublicRoutes } =
+    require('./src/routes/integrationsRoutes');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -49,7 +51,14 @@ app.use(helmet({
             // are no longer reachable — and no longer needed for the page to render.
             "font-src": ["'self'"],
             "connect-src": ["'self'"],
-            "img-src": ["'self'", "data:"],
+
+            // The documentation tool answers with n8n's own screenshots, and an
+            // answer that renders a broken image is worse than one that renders
+            // none. So one named origin is allowed and nothing else — an
+            // <img> from an arbitrary host is a beacon that reports the reader's
+            // address to whoever wrote the markdown, and the markdown here is
+            // written by a model reading pages we do not control.
+            "img-src": ["'self'", "data:", "https://docs.n8n.io"],
 
             // Nothing here embeds or is embedded, and no plugin content is expected.
             "object-src": ["'none'"],
@@ -71,10 +80,16 @@ app.use(express.json({ limit: '100kb' }));
 // answer.
 app.use('/api', requestLog);
 
+// The OAuth callback, before every router that authenticates blanket-style.
+// A browser returning from an authorisation screen has no token to present; see
+// the note in integrationsRoutes.
+app.use('/api', integrationsPublicRoutes);
+
 // Main Routes
 app.use('/api', authRoutes);
 app.use('/api', metricsRoutes);
 app.use('/api', aiRoutes);
+app.use('/api', integrationsRoutes);
 
 // --- Health probes ---
 //

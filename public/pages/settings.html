@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Settings | n8n Analytics</title>
     <script src="../logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
@@ -22,39 +22,60 @@
   "jump" button pinned to the corner. The jump button was the tell: it is not a
   feature, it is a symptom — a page needs one only when it has grown too tall to
   navigate, and adding it treats the scrollbar as the problem rather than the
-  length. Both are gone. Three views, one at a time, addressable by URL hash so
-  a link to a specific setting is possible for the first time.
+  length. Both are gone. Views, one at a time, addressable by URL hash so a link
+  to a specific setting is possible for the first time.
 
-  `maximum-scale=1.0, user-scalable=0` also went from the viewport meta: this
-  page is full of form controls, and forbidding zoom on a form is a real
-  accessibility failure, not a styling preference.
+  ── Two later changes, and why ──────────────────────────────────────────
+
+  **The form vocabulary moved to CSS.** Every control on this page carried its
+  own `style="background:var(--surface-0);border:1px solid var(--line);…"` — the
+  same six declarations, copied onto four controls, and already drifted: two of
+  them had a different radius from the other two. They are `.input`,
+  `.form-row`, `.hint` and `.note` now, defined once in input.css. Nothing on
+  this page sets a colour any more.
+
+  **Time savings left.** It was a tab here, which put the numbers on one page
+  and the inputs that produce them on another — so "why is this workflow showing
+  zero?" was a navigation away from its own answer. It is a tab on the ROI page
+  now, next to the figures it explains. See public/pages/roi.html.
+
+  `maximum-scale=1.0, user-scalable=0` went from the viewport meta here first,
+  and now from every page: this page is full of form controls, and forbidding
+  zoom on a form is a real accessibility failure rather than a styling
+  preference — but so is forbidding it on a table of numbers somebody is trying
+  to read on a phone.
 -->
 <body>
     <div class="max-w-5xl mx-auto">
         <div id="header-target" data-title="Settings"
-             data-subtitle="Preferences, ROI inputs and pipeline health"
+             data-subtitle="Preferences, integrations and pipeline health"
              data-crumbs="Dashboard|../index.html, Settings"></div>
 
         <!-- The category switcher. Real tabs: `role="tablist"` and
              `aria-selected` carry the state, so the highlight and the
              accessibility tree cannot disagree. -->
         <div class="card card-clip mb-6">
-            <div class="flex flex-wrap" style="border-bottom:1px solid var(--line)" role="tablist"
-                 aria-label="Settings sections">
+            <div class="tabs" role="tablist" aria-label="Settings sections">
                 <button class="tab-btn active px-5 py-3.5 text-[13px] font-semibold" role="tab"
                         aria-selected="true" aria-controls="section-general"
                         data-action="showSettingsSection" data-arg="general">
-                    <i class="fa-solid fa-earth-americas mr-2"></i>General
+                    <i class="fa-solid fa-sliders mr-2"></i>General
                 </button>
                 <button class="tab-btn px-5 py-3.5 text-[13px] font-semibold" role="tab"
-                        aria-selected="false" aria-controls="section-roi"
-                        data-action="showSettingsSection" data-arg="roi">
-                    <i class="fa-solid fa-clock-rotate-left mr-2"></i>Time savings
+                        aria-selected="false" aria-controls="section-assistant"
+                        data-action="showSettingsSection" data-arg="assistant">
+                    <i class="fa-solid fa-robot mr-2"></i>Assistant
+                </button>
+                <button class="tab-btn px-5 py-3.5 text-[13px] font-semibold" role="tab"
+                        aria-selected="false" aria-controls="section-memory"
+                        data-action="showSettingsSection" data-arg="memory">
+                    <i class="fa-solid fa-bookmark mr-2"></i>Memory
+                    <span id="memoryPill" class="badge badge-neutral ml-2">—</span>
                 </button>
                 <button class="tab-btn px-5 py-3.5 text-[13px] font-semibold" role="tab"
                         aria-selected="false" aria-controls="section-health"
                         data-action="showSettingsSection" data-arg="health">
-                    <i class="fa-solid fa-heart-pulse mr-2"></i>Dashboard health
+                    <i class="fa-solid fa-heart-pulse mr-2"></i>Health
                     <span id="healthPill" class="badge badge-neutral ml-2">—</span>
                 </button>
             </div>
@@ -63,18 +84,18 @@
         <!-- ============================== General ============================== -->
         <section id="section-general" class="settings-section" role="tabpanel" aria-labelledby="tab-general">
             <div class="card card-pad">
-                <h2 class="card-title mb-1">Display preferences</h2>
-                <p class="text-xs mb-5" style="color:var(--ink-3)">
-                    How this dashboard renders what it stores. Nothing here changes what is stored.
-                </p>
+                <div class="section-head">
+                    <h2>Display preferences</h2>
+                    <p>How this dashboard renders what it stores. Nothing here changes what is stored —
+                       timestamps stay UTC in the database and money stays a plain number.</p>
+                </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div class="flex flex-col gap-2">
-                        <label for="timezoneSelect" class="text-[13px] font-semibold" style="color:var(--ink-1)">
-                            <i class="fa-solid fa-clock-rotate-left mr-1.5" style="color:var(--ink-3)"></i>Display timezone
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label class="form-label" for="timezoneSelect">
+                            <i class="fa-solid fa-clock-rotate-left"></i>Display timezone
                         </label>
-                        <select id="timezoneSelect"
-                                style="width:100%;background:var(--surface-0);border:1px solid var(--line);border-radius:var(--r-md);padding:.6rem .875rem;font-size:13px;color:var(--ink-1)">
+                        <select id="timezoneSelect" class="input">
                             <option value="auto">Automatic (browser default)</option>
                             <option value="UTC">UTC (universal time)</option>
                             <option value="Europe/Athens">Europe/Athens</option>
@@ -87,19 +108,48 @@
                             <option value="Asia/Tokyo">Asia/Tokyo</option>
                             <option value="Australia/Sydney">Australia/Sydney</option>
                         </select>
-                        <p class="text-[11px] leading-relaxed" style="color:var(--ink-3)">
+                        <p class="hint">
                             Adjusts how executions and charts are displayed. Storage stays strictly UTC —
                             the indexes depend on it.
                         </p>
                     </div>
 
-                    <div class="flex flex-col gap-2">
-                        <label for="concurrencyLimitInput" class="text-[13px] font-semibold" style="color:var(--ink-1)">
-                            <i class="fa-solid fa-layer-group mr-1.5" style="color:var(--ink-3)"></i>Concurrency limit
+                    <!--
+                      Currency is a display preference and lives with the
+                      timezone for the same reason: it changes how a stored
+                      number is rendered and never the number. Hourly rates are
+                      entered on the ROI page in whatever this is set to, and
+                      the dashboard does not convert between currencies — it has
+                      no rates and inventing them would be worse than the
+                      hard-coded dollar this replaced.
+                    -->
+                    <div class="form-row">
+                        <label class="form-label" for="currencySelect">
+                            <i class="fa-solid fa-coins"></i>Currency
                         </label>
-                        <input type="number" id="concurrencyLimitInput" min="1" max="10000" step="1" placeholder="not set"
-                               style="width:100%;background:var(--surface-0);border:1px solid var(--line);border-radius:var(--r-md);padding:.6rem .875rem;font-size:13px;color:var(--ink-1)">
-                        <p class="text-[11px] leading-relaxed" style="color:var(--ink-3)">
+                        <select id="currencySelect" class="input">
+                            <option value="EUR">EUR — Euro (€)</option>
+                            <option value="USD">USD — US Dollar ($)</option>
+                            <option value="GBP">GBP — Pound Sterling (£)</option>
+                            <option value="CHF">CHF — Swiss Franc</option>
+                            <option value="SEK">SEK — Swedish Krona</option>
+                            <option value="CAD">CAD — Canadian Dollar</option>
+                            <option value="AUD">AUD — Australian Dollar</option>
+                            <option value="JPY">JPY — Japanese Yen (¥)</option>
+                        </select>
+                        <p class="hint">
+                            How money is shown on the ROI page. The hourly rates you enter there are
+                            taken to be in this currency — nothing is converted.
+                        </p>
+                    </div>
+
+                    <div class="form-row">
+                        <label class="form-label" for="concurrencyLimitInput">
+                            <i class="fa-solid fa-layer-group"></i>Concurrency limit
+                        </label>
+                        <input type="number" id="concurrencyLimitInput" class="input"
+                               min="1" max="10000" step="1" placeholder="not set">
+                        <p class="hint">
                             Your n8n <code class="mono">N8N_CONCURRENCY_PRODUCTION_LIMIT</code>. The dashboard cannot
                             read it from n8n, so tell it here and Insights will show how much headroom is left at
                             peak. Leave empty to clear.
@@ -107,65 +157,168 @@
                     </div>
                 </div>
 
-                <div class="flex justify-end mt-6 pt-5" style="border-top:1px solid var(--line)">
-                    <button id="savePrefsBtn" class="btn btn-primary">
-                        <i class="fa-solid fa-check"></i> Save preferences
-                    </button>
+                <div class="form-actions">
+                    <span class="form-actions-msg" id="prefsMsg"></span>
+                    <div class="form-actions-btns">
+                        <button id="savePrefsBtn" class="btn btn-primary">
+                            <i class="fa-solid fa-check"></i> Save preferences
+                        </button>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- ============================== ROI ============================== -->
-        <section id="section-roi" class="settings-section" role="tabpanel" hidden>
-            <div class="card card-pad">
-                <h2 class="card-title mb-1">Workflow time savings</h2>
-                <p class="text-xs mb-4" style="color:var(--ink-3)">
-                    Assign a money and time value to each workflow. The wizard turns "a person used to do this
-                    five times a week" into the per-execution number this dashboard needs.
-                </p>
+        <!-- ============================== Assistant ============================== -->
+        <!--
+          Was "Integrations", which described the plumbing rather than the
+          thing: both cards here configure the chat assistant, one with the
+          credential it runs on and one with an optional source it can read.
+          A reader looking for "why can't the assistant answer" was not looking
+          for a plug icon.
+        -->
+        <section id="section-assistant" class="settings-section" role="tabpanel" hidden>
+            <div class="card card-pad mb-6">
+                <div class="section-head">
+                    <h2>Model &amp; API key</h2>
+                    <p>Which model answers in the chat panel, and the OpenAI key that pays for it.
+                       Stored in this dashboard's own database — no environment file, no restart.</p>
+                </div>
 
-                <details class="mb-5">
-                    <summary class="label cursor-pointer select-none">
-                        <i class="fa-solid fa-circle-info mr-1.5"></i>How ROI tracking works
-                    </summary>
-                    <div class="mt-2 p-4 rounded-lg text-[12px] leading-relaxed flex flex-col gap-2"
-                         style="background:var(--surface-0);border:1px solid var(--line);color:var(--ink-2)">
-                        <p><strong style="color:var(--ink-1)">1 · Set the wage.</strong> The hourly cost of the manual
-                            work being replaced.</p>
-                        <p><strong style="color:var(--ink-1)">2 · Use the wizard.</strong> Say how often a person used
-                            to do the task. It reads your real execution volume over the last 30 days and scales that
-                            into seconds saved per execution, so the figure tracks actual usage instead of an estimate
-                            made once and never revisited.</p>
-                    </div>
-                </details>
+                <div class="flex items-center gap-3 mb-5">
+                    <span id="aiStatusDot" class="badge badge-neutral">
+                        <i class="fa-solid fa-circle-notch fa-spin badge-dot"></i>Checking
+                    </span>
+                    <span id="aiStatusDetail" class="hint"></span>
+                </div>
 
-                <div class="filter-bar mb-5">
-                    <div class="field grow">
-                        <i class="fa-solid fa-search text-xs" style="color:var(--ink-3)"></i>
-                        <input type="text" id="workflowSearch" placeholder="Search workflows…" class="w-full"
-                               aria-label="Search workflows">
+                <div class="form-grid">
+                    <div class="form-row">
+                        <label class="form-label" for="aiApiKeyInput">
+                            <i class="fa-solid fa-key"></i>OpenAI API key
+                        </label>
+                        <input type="password" id="aiApiKeyInput" class="input input-mono"
+                               autocomplete="off" spellcheck="false" placeholder="sk-proj-…">
+                        <p class="hint">
+                            Never sent back to this page once saved — only the last four characters are.
+                            Paste a new one to replace it.
+                        </p>
                     </div>
-                    <div class="field">
-                        <span class="label shrink-0">Sort</span>
-                        <select id="workflowSort" aria-label="Sort workflows">
-                            <option value="name_asc">Name (A–Z)</option>
-                            <option value="name_desc">Name (Z–A)</option>
-                            <option value="execs_desc">Executions (most first)</option>
-                            <option value="time_desc">Time configured (most first)</option>
-                        </select>
+
+                    <div class="form-row">
+                        <label class="form-label" for="aiModelInput">
+                            <i class="fa-solid fa-microchip"></i>Model
+                        </label>
+                        <input type="text" id="aiModelInput" class="input input-mono"
+                               autocomplete="off" spellcheck="false" placeholder="gpt-5.4-mini">
+                        <!--
+                          A free text field with a recommendation rather than a
+                          dropdown. A fixed list would make every model released
+                          after this page shipped unreachable, which is the exact
+                          barrier moving this setting out of the environment was
+                          meant to remove.
+                        -->
+                        <p class="hint">
+                            <strong>Recommended: <code class="mono">gpt-5.4-mini</code></strong> —
+                            the one this dashboard is tested against. A replacement must accept
+                            <code class="mono">temperature</code> <em>and</em> support function tools on
+                            <code class="mono">/v1/chat/completions</code>; several recent models do not, and
+                            fail on the first question rather than at save time. Leave empty for the default.
+                        </p>
                     </div>
                 </div>
 
-                <div id="settingsContainer" class="flex flex-col gap-3"></div>
+                <div class="form-actions">
+                    <span class="form-actions-msg" id="aiSaveNote"></span>
+                    <div class="form-actions-btns">
+                        <button id="aiClearKeyBtn" class="btn btn-danger" hidden data-action="clearAiKey">
+                            <i class="fa-solid fa-trash-can"></i> Remove key
+                        </button>
+                        <button id="aiSaveBtn" class="btn btn-primary" data-action="saveAiConfig">
+                            <i class="fa-solid fa-check"></i> Save
+                        </button>
+                    </div>
+                </div>
+            </div>
 
-                <!-- Sticky within the panel, so the save button is reachable from
-                     anywhere in a long workflow list without a floating button
-                     that belongs to no section in particular. -->
-                <div class="flex justify-end mt-6 pt-4 sticky bottom-0 z-10"
-                     style="background:var(--surface-1);border-top:1px solid var(--line)">
-                    <button id="saveBtn" class="btn btn-primary">
-                        <i class="fa-solid fa-floppy-disk"></i> Save settings
-                    </button>
+            <div class="card card-pad">
+                <div class="section-head">
+                    <h2>n8n documentation</h2>
+                    <p>Lets the assistant answer <em>why</em> something behaves the way it does, from
+                       the official n8n documentation — alongside <em>what happened</em>, which it
+                       already reads from your own data.</p>
+                </div>
+
+                <!--
+                  The connection is personal, and the copy says so plainly rather
+                  than leaving it to be discovered. The documentation service
+                  issues the credential against the account that approves it, so
+                  a shared one would attribute every question to one person and
+                  land any misuse on them.
+                -->
+                <div class="note mb-5">
+                    <i class="fa-solid fa-user-lock"></i>
+                    <p>
+                        This connection is yours alone. The documentation service authorises it
+                        against your own account, so it is not shared with other users of this
+                        dashboard — each person connects their own.
+                    </p>
+                </div>
+
+                <div class="form-actions" style="margin-top:0;padding-top:0;border-top:none">
+                    <span class="flex items-center gap-3">
+                        <span id="docsStatusDot" class="badge badge-neutral">
+                            <i class="fa-solid fa-circle-notch fa-spin badge-dot"></i>Checking
+                        </span>
+                        <span id="docsStatusDetail" class="hint"></span>
+                    </span>
+                    <div class="form-actions-btns">
+                        <button id="docsConnectBtn" class="btn btn-primary" hidden
+                                data-action="connectDocs">
+                            <i class="fa-solid fa-link"></i> Connect
+                        </button>
+                        <button id="docsDisconnectBtn" class="btn btn-danger" hidden
+                                data-action="disconnectDocs">
+                            <i class="fa-solid fa-link-slash"></i> Disconnect
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================== Assistant memory ==================== -->
+        <section id="section-memory" class="settings-section" role="tabpanel" hidden>
+            <div class="card card-pad">
+                <div class="section-head">
+                    <h2>What the assistant remembers about you</h2>
+                    <p>Short notes it keeps between conversations, so starting a new one does not
+                       mean explaining yourself again. It writes one only when you tell it something
+                       about how you work &mdash; never a measurement, and never something it worked
+                       out from your questions.</p>
+                </div>
+
+                <!--
+                  The list being here, readable and deletable, is the condition on
+                  the feature existing rather than a nicety: a note about somebody
+                  that they cannot see or remove is not memory, it is a file being
+                  kept on them.
+                -->
+                <div class="note mb-5">
+                    <i class="fa-solid fa-user-lock"></i>
+                    <p>
+                        These are yours and nobody else can see them. Deleting one takes effect on
+                        your next question &mdash; answers already given are not revisited.
+                    </p>
+                </div>
+
+                <div id="memoryList"></div>
+
+                <div class="form-actions">
+                    <span class="form-actions-msg" id="memoryCount"></span>
+                    <div class="form-actions-btns">
+                        <button class="btn btn-danger btn-sm" type="button" id="memoryForgetAll" hidden>
+                            <i class="fa-solid fa-trash"></i> Forget everything
+                        </button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -173,12 +326,10 @@
         <!-- ============================== Health ============================== -->
         <section id="section-health" class="settings-section" role="tabpanel" hidden>
             <div class="card card-pad">
-                <div class="flex items-start justify-between gap-4 mb-4">
-                    <div>
-                        <h2 class="card-title mb-1">Dashboard health</h2>
-                        <p class="text-xs" style="color:var(--ink-3)">
-                            Is the pipeline behind these numbers actually running? (F-19)
-                        </p>
+                <div class="flex items-start justify-between gap-4">
+                    <div class="section-head" style="margin-bottom:1rem">
+                        <h2>Dashboard health</h2>
+                        <p>Is the pipeline behind these numbers actually running? (F-19)</p>
                     </div>
                     <button id="healthRefresh" class="btn btn-sm shrink-0">
                         <i class="fa-solid fa-rotate"></i> Refresh
@@ -194,6 +345,7 @@
     <script src="../logic/ui/components.js"></script>
     <script src="../logic/ui/viz.js"></script>
     <script type="module" src="../logic/settings.js"></script>
+    <script src="../logic/settings/settings_memory.js"></script>
     <script src="../logic/header.js"></script>
 </body>
 </html>

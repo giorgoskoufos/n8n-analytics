@@ -318,6 +318,37 @@
     };
 
     // ─────────────────────────────────────────────────────────────────────
+    // Tab strips
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Brings the selected tab into view inside a `.tabs` strip.
+     *
+     * Below `sm` the strip scrolls sideways rather than wrapping onto three
+     * lines, and a strip that scrolls has an off-screen half. Selecting a tab
+     * from a keyboard, or landing on `settings.html#health` from a link, would
+     * otherwise mark a tab that is not on screen — so the page shows a strip
+     * with nothing selected on it and the panel below belonging to none of the
+     * tabs you can see.
+     *
+     * `inline: 'nearest'` and `block: 'nearest'` — 'nearest' is the value that
+     * does nothing when the element is already visible, which is the common
+     * case and the one where any scrolling at all is the page moving under
+     * somebody. It is also what keeps a horizontal strip from dragging the
+     * whole page vertically to reach itself.
+     */
+    function revealTab(btn) {
+        if (!btn || !btn.closest('.tabs')) return;
+        try {
+            btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        } catch (ignored) {
+            // Older engines only take the boolean form, and the fallback is a
+            // scroll that is slightly ruder rather than no scroll at all.
+            btn.scrollIntoView(false);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // HTML error bodies — F-24 §3
     // ─────────────────────────────────────────────────────────────────────
 
@@ -405,6 +436,7 @@
         bindGroupCollapse,
         crumbs,
         scroll,
+        revealTab,
         readHtmlError,
         errorMessage
     };

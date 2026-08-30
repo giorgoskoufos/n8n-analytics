@@ -1,95 +1,85 @@
-document.addEventListener('DOMContentLoaded', loadRoiMetrics);
+/**
+ * The ROI page.
+ *
+ * Two tabs, one subject. The figures were here and the inputs that produce them
+ * were in Settings, which put the answer to this page's most common question —
+ * "why is that workflow zero?" — on a different page under a different name.
+ *
+ * The tab lives in the URL hash for the same reason the settings tabs do: a
+ * setting that cannot be linked to cannot be pointed at. `roi.html#configure` is
+ * where `settings.html#roi` now redirects.
+ */
 
-async function loadRoiMetrics() {
-    const kpiTotalTime = document.getElementById('kpiTotalTime');
-    const kpiTotalMoney = document.getElementById('kpiTotalMoney');
-    const kpiExecutions = document.getElementById('kpiExecutions');
-    const tableBody = document.getElementById('roiWorkflowsTable');
-    const filterEl = document.getElementById('roiTimeRangeFilter');
-    const timeRange = filterEl ? filterEl.value : 'all';
+import * as overview from './roi/roi_overview.js';
+import * as config from './roi/roi_config.js';
 
-    try {
-        const response = await fetchWithAuth(`/api/analytics/roi?timeRange=${timeRange}`);
-        if (!response.ok) throw new Error("Failed to fetch ROI metrics");
-        
-        const data = await response.json();
-        
-        // Update KPIs
-        const totalSecs = parseInt(data.summary.total_time_saved_seconds) || 0;
-        kpiTotalTime.innerText = formatTimeExtensive(totalSecs);
-        
-        const totalMoney = parseFloat(data.summary.total_money_saved) || 0;
-        if (kpiTotalMoney) kpiTotalMoney.innerText = formatCurrency(totalMoney);
+const SECTIONS = ['overview', 'configure'];
+const DEFAULT = 'overview';
 
-        kpiExecutions.innerText = (parseInt(data.summary.total_executions) || 0).toLocaleString();
+function show(name, { fromHash = false } = {}) {
+    const target = SECTIONS.includes(name) ? name : DEFAULT;
 
-        // Update Table
-        if (data.topWorkflows && data.topWorkflows.length > 0) {
-            tableBody.innerHTML = data.topWorkflows.map(wf => `
-                <tr class="hover:bg-n8n-dark/30 transition-colors">
-                    <td class="py-3 pr-4 font-medium text-white">${escapeHtml(wf.name)}</td>
-                    <td class="py-3 px-4 text-right text-ink-2 font-mono">${(parseInt(wf.executions) || 0).toLocaleString()}</td>
-                    <td class="py-3 px-4 text-right text-green-400 font-bold">${formatTimeExtensive(wf.time_saved_seconds)}</td>
-                    <td class="py-3 pl-4 text-right text-emerald-400 font-bold">${formatCurrency(wf.money_saved)}</td>
-                </tr>
-            `).join('');
-        } else {
-            tableBody.innerHTML = `
-                <tr>
-                    <td colspan="4" class="py-12 text-center text-ink-3">
-                        <i class="fa-solid fa-clock-rotate-left text-4xl mb-3 opacity-20 block"></i>
-                        <p>No ROI data available.</p>
-                        <a href="settings.html" class="text-indigo-400 hover:text-indigo-300 text-sm mt-2 inline-block underline">Configure Time Saved in Settings</a>
-                    </td>
-                </tr>
-            `;
-        }
-
-    } catch (err) {
-        console.error(err);
-        kpiTotalTime.innerText = 'Err';
-        if (kpiTotalMoney) kpiTotalMoney.innerText = 'Err';
-        kpiExecutions.innerText = 'Err';
-        tableBody.innerHTML = `<tr><td colspan="4" class="py-6 text-center text-red-500">Failed to load ROI data. <button data-action="loadRoiMetrics" class="underline text-red-400 hover:text-white ml-2">Retry</button></td></tr>`;
+    for (const section of SECTIONS) {
+        const panel = document.getElementById(`section-${section}`);
+        if (panel) panel.hidden = section !== target;
     }
+
+    document.querySelectorAll('[data-action="showRoiSection"]').forEach((btn) => {
+        // The coverage KPI is also a `showRoiSection` control, and it is a card
+        // rather than a tab — so only the things in the tab strip take the
+        // selected state, or a KPI tile starts looking like the active tab.
+        if (!btn.classList.contains('tab-btn')) return;
+        const active = btn.getAttribute('data-arg') === target;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', String(active));
+        if (active) window.UI?.revealTab(btn);
+    });
+
+    if (!fromHash) {
+        window.history.replaceState(null, '', `${window.location.pathname}#${target}`);
+    }
+    window.dispatchEvent(new Event('resize'));
 }
 
-// Listen for filter changes
-document.addEventListener('DOMContentLoaded', () => {
-    const filterEl = document.getElementById('roiTimeRangeFilter');
-    if (filterEl) {
-        filterEl.addEventListener('change', loadRoiMetrics);
-    }
+window.showRoiSection = (name) => show(String(name));
+
+/** Kept on `window` because the retry button in an error row dispatches to it. */
+window.loadRoiMetrics = () => overview.load();
+
+window.addEventListener('hashchange', () => {
+    show(window.location.hash.replace('#', '') || DEFAULT, { fromHash: true });
 });
 
-// Helper: Convert seconds to "X d, Y h, Z m" format
-function formatTimeExtensive(totalSeconds) {
-    if (!totalSeconds || totalSeconds <= 0) return '0 m';
+// Coverage is counted by the Configure tab and displayed by Overview. The event
+// is what keeps them from importing each other — and it means the tile updates
+// the moment somebody types a figure, before anything is saved.
+document.addEventListener('roi:coverage', (event) => overview.setCoverage(event.detail));
+document.addEventListener('roi:saved', () => overview.load());
 
-    const days = Math.floor(totalSeconds / (3600 * 24));
-    totalSeconds -= days * 3600 * 24;
-    const hours = Math.floor(totalSeconds / 3600);
-    totalSeconds -= hours * 3600;
-    const minutes = Math.floor(totalSeconds / 60);
+document.addEventListener('DOMContentLoaded', async () => {
+    show(window.location.hash.replace('#', '') || DEFAULT, { fromHash: true });
 
-    const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+    // Both tabs are loaded up front, not lazily. The list is one request that
+    // the coverage tile on the OTHER tab depends on, so deferring it would mean
+    // the Overview tab showing "—" for coverage until somebody happened to open
+    // Configure — which is the tab they open because coverage told them to.
+    //
+    // Awaited: `formatMoney` reads the configured currency, and rendering the
+    // money column before the setting arrives paints it in the wrong one and
+    // never repaints.
+    await window.settingsReady;
+    config.attach();
+    await Promise.all([overview.load(), config.load()]);
 
-    return parts.join(' ');
-}
+    document.getElementById('roiTimeRangeFilter')
+        ?.addEventListener('change', () => overview.load());
+});
 
-// escapeHtml lives in global_functions.js, loaded before this file.
-
-
-// Helper: Format Currency
-function formatCurrency(amount) {
-    const value = parseFloat(amount);
-    if (!value || value <= 0) return '$0.00';
-    return new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2
-    }).format(value);
-}
+// Leaving the page with unsaved figures is worth one interruption. Switching
+// TABS is not — nothing is lost, both tabs are the same page, and a confirm on
+// a tab click is the kind of dialog people learn to dismiss without reading.
+window.addEventListener('beforeunload', (event) => {
+    if (!config.hasUnsaved()) return;
+    event.preventDefault();
+    event.returnValue = '';
+});

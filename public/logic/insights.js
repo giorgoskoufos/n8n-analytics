@@ -129,16 +129,14 @@ window.setInsightsRange = function (hours) {
     currentRange.startDate = new Date(now.getTime() - hours * 3600000).toISOString();
     currentRange.endDate = now.toISOString();
 
+    // The pressed state IS the styling. `.chip[aria-pressed="true"]` paints it,
+    // so there is no second record of which range is selected that can drift
+    // from the first — which is what adding and removing four Tailwind classes
+    // by hand was.
     const mapping = { 24: 'btn24h', 48: 'btn48h', 168: 'btn7d', 336: 'btn14d', 720: 'btn30d' };
     document.querySelectorAll('#presetRangeContainer button').forEach((btn) => {
-        btn.classList.remove('border-indigo-500/40', 'text-indigo-300');
-        btn.classList.add('border-line', 'text-ink-3');
+        btn.setAttribute('aria-pressed', String(btn.id === mapping[hours]));
     });
-    const active = document.getElementById(mapping[hours]);
-    if (active) {
-        active.classList.remove('border-line', 'text-ink-3');
-        active.classList.add('border-indigo-500/40', 'text-indigo-300');
-    }
     loadAll();
 };
 
@@ -148,9 +146,9 @@ function applyCustomRange() {
     if (!startInput.value || !endInput.value) return;
     currentRange.startDate = new Date(startInput.value + 'T00:00:00').toISOString();
     currentRange.endDate = new Date(endInput.value + 'T23:59:59').toISOString();
+    // A custom range is not any of the presets, so none of them is pressed.
     document.querySelectorAll('#presetRangeContainer button').forEach((btn) => {
-        btn.classList.remove('border-indigo-500/40', 'text-indigo-300');
-        btn.classList.add('border-line', 'text-ink-3');
+        btn.setAttribute('aria-pressed', 'false');
     });
     loadAll();
 }

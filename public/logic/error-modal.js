@@ -63,7 +63,7 @@
                 </button>
             </div>
 
-            <div class="p-6 max-h-[75vh] overflow-y-auto custom-scrollbar">
+            <div class="p-4 sm:p-6 max-h-[75dvh] overflow-y-auto custom-scrollbar">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     <div>
                         <p class="label mb-1">Failing node</p>

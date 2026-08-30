@@ -1,34 +1,50 @@
 // ==========================================
-// n8n AI Chat — the full-page shell
+// The full-page conversation
 // ==========================================
 //
-// F-24 §6. This file was 159 lines that re-implemented what chat-widget.js
-// already did, and the copies had drifted: this one rendered the assistant's
-// answers with `escapeHtml`, so every markdown table the server prompt asks
-// for — "if the data has 2 or more columns, ALWAYS use a Markdown table" —
-// arrived here as a screen of literal pipe characters.
+// F-24 §6 reduced this file from 159 lines to a mounting call, because it was a
+// second implementation of what the floating panel already did and the two had
+// drifted: this one rendered answers with `escapeHtml`, so every markdown table
+// the server prompt asks for arrived here as a screen of literal pipes.
 //
-// All of the behaviour is in chat-core.js now. What is left is the part that is
-// genuinely specific to a full page rather than a floating panel: which
-// elements to use, and that a full page has room to replay the history.
+// It stayed reduced. What is left is the two things a full page genuinely
+// decides differently from a 420px panel:
+//
+//   · reading size — `compact` is off, so the type is a size larger;
+//   · that there is room to replay the whole history, and a reason to. Arriving
+//     at a blank page having asked ten questions this morning is the thing that
+//     made people distrust it.
+//
+// The panel's own shell logic — opening, focus return, the mobile sheet, the
+// resize grip — has no equivalent here, which is why none of it is in this file.
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     const chat = window.ChatCore.mount({
-        box: document.getElementById('chatBox'),
-        input: document.getElementById('userInput'),
-        send: document.getElementById('sendBtn')
+        log: document.getElementById('assistantLog'),
+        input: document.getElementById('assistantInput'),
+        send: document.getElementById('assistantSend'),
+        stop: document.getElementById('assistantStop'),
+        status: document.getElementById('assistantStatus'),
+        jump: document.getElementById('assistantJump'),
+        strip: document.getElementById('assistantTagStrip'),
+        menu: document.getElementById('assistantTagMenu'),
+        toolsButton: document.querySelector('[data-assistant="tools"]'),
+        toolHint: document.getElementById('assistantToolHint'),
+        threadButton: document.querySelector('[data-assistant="threads"]'),
+        threadTitle: document.getElementById('assistantThreadTitle'),
+        threadMenu: document.getElementById('assistantThreads'),
+        newButton: document.querySelector('[data-assistant="new"]')
     });
 
     if (!chat) {
-        console.warn('[CHAT] the page is missing one of #chatBox, #userInput, #sendBtn.');
+        console.warn('[CHAT] the page is missing one of #assistantLog, #assistantInput, #assistantSend.');
         return;
     }
 
-    // The widget loads history because it is small and easily lost; the full
-    // page does it for the opposite reason — there is room to show it, and
-    // arriving at a blank page having asked ten questions this morning is the
-    // thing that made people distrust it.
-    chat.loadHistory();
+    await chat.loadHistory();
+    // An answer that was still being written when the reader clicked through to
+    // this page. Same registry, same turn — see src/ai/turns.js.
+    await chat.resumeInFlight();
 
-    document.getElementById('userInput')?.focus();
+    document.getElementById('assistantInput')?.focus();
 });

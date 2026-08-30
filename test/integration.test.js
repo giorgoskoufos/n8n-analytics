@@ -348,7 +348,12 @@ test('every read endpoint answers with data', async () => {
         ['/api/analytics/error-intelligence', (b) => 'summary' in b && 'categories' in b],
         ['/api/settings', (b) => typeof b === 'object'],
         ['/api/settings/roi', (b) => b.length === 3],
-        ['/api/chat-history', (b) => Array.isArray(b)],
+        // No longer a bare array. The chat is threaded now, so this answers
+        // "which conversation, and what is in it" — and `conversation: null` for
+        // a user who has never asked anything is a real answer rather than an
+        // empty list pretending to be one.
+        ['/api/chat-history',
+            (b) => Array.isArray(b.messages) && 'conversation' in b],
         ['/api/analytics/execution-volume/details?time=' +
             encodeURIComponent(new Date(Date.now() - 600000).toISOString()) + '&window=60',
             (b) => Array.isArray(b) && b.length > 0]
@@ -1106,13 +1111,19 @@ test('ROI writes validate the workflow and the numbers', async () => {
     assert.equal(absurd.status, 400);
 });
 
-test('the AI assistant is refused to a scoped user rather than answering unscoped', async () => {
-    // No project membership is mirrored here, so a member currently resolves as
-    // unrestricted and the chat is allowed through to OpenAI — which is not
-    // configured in this environment. Either answer is acceptable; what must not
-    // happen is a crash.
+test('the AI assistant no longer refuses a scoped user outright', async () => {
+    // The inverse of what this used to assert. The assistant answered 403 to
+    // every project member, because a filter cannot be safely appended to a
+    // query a model composed — one subquery steps around it. It no longer
+    // composes those queries: the restriction now lives inside the views it
+    // reads (see the view-scoping test in unit.test.js), so a member can be
+    // answered within their own scope.
+    //
+    // 500 is still acceptable, because whether OpenAI is reachable is a property
+    // of the environment rather than of this behaviour. 403 is not.
     const r = await api('/api/ai-chat', { token: MEMBER, method: 'POST', body: { message: 'hello' } });
-    assert.ok([403, 500].includes(r.status), `unexpected ${r.status}`);
+    assert.notEqual(r.status, 403, 'a project member must not be refused outright any more');
+    assert.ok([200, 500].includes(r.status), `unexpected ${r.status}`);
 });
 
 // -------------------------------------------------------------------- logging
@@ -1513,5 +1524,59 @@ test('the slowest list carries an execution to open a trace on', async () => {
             assert.ok(row.max_duration >= row.avg_duration - 1e-9,
                 'the maximum cannot be below the mean');
         }
+    }
+});
+
+// ============================================ H-06 · the documentation service
+//
+// The connection is per person, and that is a decision about accountability
+// rather than about privacy. The documentation is public — everyone gets the
+// same page — but the credential is issued against the approver's own account
+// at the service, so a single shared one would attribute every question to one
+// person and land any misuse of the service on them.
+//
+// These tests hold the two properties that follow: nobody borrows anybody
+// else's connection, and the callback cannot be driven by someone who did not
+// start the flow.
+
+test('the docs connection is reported per user, and nobody borrows another', async () => {
+    const owner = await api('/api/integrations/docs', { token: OWNER });
+    assert.equal(owner.status, 200);
+    assert.equal(owner.body.provider, 'n8n-docs');
+    assert.equal(typeof owner.body.connected, 'boolean');
+    // The token itself must never appear in something a page can read.
+    assert.ok(!('refresh_token' in owner.body), 'the credential leaked into the status');
+    assert.ok(!('access_token' in owner.body));
+
+    const member = await api('/api/integrations/docs', { token: MEMBER });
+    assert.equal(member.status, 200);
+    assert.equal(member.body.connected, owner.body.connected === true ? member.body.connected : false);
+});
+
+test('the OAuth callback is reachable without a token, and useless without state', async () => {
+    // It has to be reachable: a browser returning from an authorisation screen
+    // carries no Authorization header, because the token is in localStorage and
+    // a top-level navigation cannot send it. Everything therefore rests on the
+    // state parameter.
+    const res = await fetch(BASE + '/api/integrations/docs/callback?code=fake&state=invented');
+    assert.notEqual(res.status, 401, 'the callback must not require a token');
+    assert.equal(res.status, 400);
+
+    const html = await res.text();
+    assert.match(html, /expired or did not come from here/);
+    // The same answer for an unknown state and an expired one: telling them
+    // apart would say which guess was close.
+    assert.ok(!/invented/.test(html), 'the callback echoed the state back');
+});
+
+test('an authenticated caller cannot read the credential through any route', async () => {
+    // Belt and braces on the rule that the secret has exactly one reader. If a
+    // route ever starts returning it, this fails rather than the leak being
+    // found later.
+    for (const route of ['/api/integrations/docs', '/api/settings', '/api/analytics/system']) {
+        const r = await api(route, { token: OWNER });
+        const body = JSON.stringify(r.body || {});
+        assert.ok(!/refresh_token|"access_token"/.test(body),
+            `${route} exposed a credential field`);
     }
 });

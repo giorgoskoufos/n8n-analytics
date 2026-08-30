@@ -204,6 +204,33 @@ async function query(sql, params = [], { timeoutMs = DEFAULT_TIMEOUT_MS, scope }
     return task;
 }
 
+/**
+ * Several statements under one scope load.
+ *
+ * `query` reloads `ai_scope` before every statement, which is right for a single
+ * question and badly wrong for a batch: building the catalogue is ~350 inserts,
+ * and a scope reload in front of each would have been ~57,000 statements to
+ * write 350 rows.
+ *
+ * The callback gets `run` and `all` directly and holds the serialised slot for
+ * its duration, so nothing else can change `ai_scope` underneath it — which is
+ * the same guarantee `query` relies on, taken for longer.
+ */
+async function withScope(scope, fn) {
+    await open();
+    if (scope === undefined) {
+        throw new Error('readonlyDb.withScope requires an explicit scope (null for unrestricted).');
+    }
+
+    const task = chain.then(async () => {
+        await buildLabels();
+        await loadScope(scope);
+        return fn({ run, all });
+    });
+    chain = task.then(() => undefined, () => undefined);
+    return task;
+}
+
 function close() {
     if (!db) return Promise.resolve();
     return new Promise((resolve) => {
@@ -211,4 +238,4 @@ function close() {
     });
 }
 
-module.exports = { query, close, _internal: { buildLabels, loadScope, open } };
+module.exports = { query, withScope, close, _internal: { buildLabels, loadScope, open } };

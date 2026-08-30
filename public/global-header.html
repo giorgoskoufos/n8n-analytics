@@ -138,3 +138,120 @@
         <div id="headerActions" class="flex items-center gap-2 shrink-0"></div>
     </header>
 </template>
+
+<!-- ===================== TEMPLATE: assistant =====================
+
+  The assistant used to live in index.html and nowhere else — the dashboard had
+  it, and Insights, Errors, ROI, Alerts and Settings did not. It is here for the
+  same reason the rail is: one copy, mounted by header.js on every page that has
+  a shell, so "which pages have the assistant" is not a question anyone has to
+  keep answering.
+
+  Two accessibility decisions worth naming, because both are easy to get wrong
+  in the same direction:
+
+  · `aria-modal="false"`. On desktop this panel does NOT block the page — you
+    can read a chart while it writes — and claiming otherwise would make a
+    screen reader hide content that is still there. The mobile sheet genuinely
+    does cover everything, so panel.js sets it to true only there.
+
+  · `role="log"` on the conversation and a separate `role="status"` for
+    progress. A log announces additions in order; a status is polite and
+    interruptible. Announcing every streamed token would be neither.
+-->
+<template id="tpl-assistant">
+    <button id="assistantLauncher" class="assistant-launcher" type="button"
+            aria-controls="assistantPanel" aria-expanded="false"
+            aria-label="Open the assistant">
+        <i class="fa-solid fa-robot" aria-hidden="true"></i>
+        <span id="assistantUnread" class="dot" hidden></span>
+    </button>
+
+    <section id="assistantPanel" class="assistant-panel" hidden
+             role="dialog" aria-modal="false" aria-labelledby="assistantTitle">
+        <div class="assistant-resize" id="assistantResize" aria-hidden="true"></div>
+
+        <!--
+          The thread's name IS the switcher. A label beside a button that changes
+          it would say the same thing twice and still leave "which conversation
+          am I in" answerable only by opening something.
+        -->
+        <header class="assistant-head" style="position:relative">
+            <h2 class="sr-only" id="assistantTitle">Assistant</h2>
+            <button class="assistant-thread" type="button" data-assistant="threads"
+                    aria-haspopup="listbox" aria-expanded="false"
+                    aria-controls="assistantThreads" aria-label="Switch conversation">
+                <span class="msg-avatar" aria-hidden="true"><i class="fa-solid fa-robot"></i></span>
+                <span class="thread-title" id="assistantThreadTitle">Assistant</span>
+                <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+            </button>
+
+            <div id="assistantThreads" class="tag-menu" role="listbox"
+                 aria-label="Conversations" hidden></div>
+
+            <div class="assistant-head-actions">
+                <button class="assistant-icon-btn" type="button" data-assistant="new"
+                        title="New conversation" aria-label="Start a new conversation">
+                    <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
+                </button>
+                <a class="assistant-icon-btn" id="assistantExpand" href="pages/chat.html"
+                   title="Open the full conversation" aria-label="Open the full conversation">
+                    <i class="fa-solid fa-up-right-and-down-left-from-center" aria-hidden="true"></i>
+                </a>
+                <button class="assistant-icon-btn" type="button" data-assistant="close"
+                        title="Close" aria-label="Close the assistant">
+                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
+            </div>
+        </header>
+
+        <div id="assistantLog" class="assistant-log" role="log"
+             aria-labelledby="assistantTitle" tabindex="0"></div>
+
+        <!-- Progress, for people who are not watching the panel. Never the
+             tokens themselves — a screen reader reciting a streamed answer three
+             characters at a time is unusable. -->
+        <p id="assistantStatus" class="sr-only" role="status" aria-live="polite"></p>
+
+        <footer class="assistant-foot">
+            <button id="assistantJump" class="assistant-jump" type="button" hidden>
+                <i class="fa-solid fa-arrow-down" aria-hidden="true"></i> New answer
+            </button>
+
+            <div id="assistantTagStrip" class="tag-strip mb-1.5" hidden></div>
+
+            <div class="assistant-composer" style="position:relative">
+                <!-- The `@` picker. `aria-activedescendant` on the textarea
+                     points into this list, which is how a combobox keeps focus
+                     in the input while the arrow keys move a selection. -->
+                <div id="assistantTagMenu" class="tag-menu" role="listbox"
+                     aria-label="Tag something" hidden></div>
+
+                <textarea id="assistantInput" rows="1" maxlength="2000"
+                          placeholder="Ask about your workflows…"
+                          aria-label="Ask the assistant"
+                          aria-autocomplete="list" aria-expanded="false"
+                          aria-controls="assistantTagMenu"></textarea>
+
+                <div class="assistant-composer-row">
+                    <button class="assistant-icon-btn" type="button" data-assistant="tools"
+                            title="Tools" aria-label="Choose which tools to use"
+                            aria-expanded="false">
+                        <i class="fa-solid fa-plus" aria-hidden="true"></i>
+                    </button>
+                    <span id="assistantToolHint" class="assistant-hint"></span>
+                    <button id="assistantSend" class="assistant-send" type="button"
+                            aria-label="Send">
+                        <i class="fa-solid fa-arrow-up" aria-hidden="true"></i>
+                    </button>
+                    <button id="assistantStop" class="assistant-stop" type="button" hidden>
+                        <i class="fa-solid fa-stop" aria-hidden="true"></i> Stop
+                    </button>
+                </div>
+            </div>
+
+            <p class="note">Reads a replica of your n8n data, and can be wrong — open “How this
+                was worked out” to see what it actually measured.</p>
+        </footer>
+    </section>
+</template>

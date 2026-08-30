@@ -126,6 +126,48 @@ function isValidConcurrencyLimit(v) {
     return Number.isInteger(n) && n >= 1 && n <= 10000;
 }
 
+/**
+ * The assistant's model, checked for shape and not for membership.
+ *
+ * There is deliberately no list of known models here. Providers ship new ones
+ * faster than this dashboard ships, and an allowlist would make the newest model
+ * unusable until somebody edited this file and redeployed — which is precisely
+ * the barrier moving the setting out of the environment exists to remove. The
+ * one that has been smoke-tested against this tool loop is recommended in the
+ * settings page instead; see dao/aiConfigDao.RECOMMENDED_MODEL for what "tested"
+ * means and which two requirements a wrong choice fails on.
+ *
+ * So this checks only that the value could be a model identifier at all, which
+ * is what stops the field being used as free storage. An empty string clears it
+ * and falls back to the environment, then to the default.
+ */
+function isValidModelName(v) {
+    if (v === '') return true;
+    return typeof v === 'string' && v.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(v);
+}
+
+/**
+ * The currency the ROI page renders in.
+ *
+ * A display preference, like the timezone beside it: it changes how a stored
+ * number is shown and never the number. The dashboard holds no exchange rates
+ * and does not convert — the hourly rates somebody typed are taken to be in
+ * whatever this says, which is the honest reading and the only one available.
+ *
+ * Checked against Intl rather than a list, for the same reason the timezone is:
+ * asking the runtime what it can format is authoritative, and a hard-coded list
+ * of codes is a list that is wrong the moment it is written.
+ */
+function isValidCurrency(v) {
+    if (typeof v !== 'string' || !/^[A-Za-z]{3}$/.test(v)) return false;
+    try {
+        new Intl.NumberFormat('en-US', { style: 'currency', currency: v.toUpperCase() });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 const ALLOWED_SETTINGS = {
     timezone: {
         check: isValidTimeZone,
@@ -134,8 +176,36 @@ const ALLOWED_SETTINGS = {
     concurrency_limit: {
         check: isValidConcurrencyLimit,
         hint: 'a whole number of concurrent executions between 1 and 10000, or empty to clear'
+    },
+    ai_model: {
+        check: isValidModelName,
+        hint: 'a model identifier, for example gpt-5.4-mini, or empty to use the default'
+    },
+    currency: {
+        check: isValidCurrency,
+        hint: 'a three-letter ISO 4217 code, for example EUR'
     }
 };
+
+/**
+ * An OpenAI API key, checked for shape only.
+ *
+ * The only check worth making here is that something was typed and that it is
+ * not absurd — whether the key WORKS is a question only the provider can answer,
+ * and a regex that insists on `sk-` today is a regex that rejects a valid key
+ * the day the prefix changes. The settings page verifies by using it.
+ */
+function validateApiKey(value) {
+    if (typeof value !== 'string') return { ok: false, error: 'An API key is required.' };
+    const clean = value.trim();
+    if (clean.length < 20 || clean.length > 400) {
+        return { ok: false, error: 'That does not look like an API key.' };
+    }
+    if (/\s/.test(clean)) {
+        return { ok: false, error: 'An API key contains no spaces — check for a copy-paste error.' };
+    }
+    return { ok: true, value: clean };
+}
 
 /**
  * Validates one global setting. Returns { ok } or { ok: false, error }.
@@ -198,6 +268,7 @@ module.exports = {
     parseDateRange,
     parseExecutionMode,
     validateSetting,
+    validateApiKey,
     validateRoiEntry,
     ALLOWED_SETTINGS,
     EXECUTION_MODES

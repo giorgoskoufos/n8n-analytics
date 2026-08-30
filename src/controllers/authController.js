@@ -1,7 +1,7 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { pool } = require('../config/db');
+const userDao = require('../dao/userDao');
 const { JWT_SECRET } = require('../middlewares/auth');
 const log = require('../utils/logger').logger('AUTH');
 
@@ -9,25 +9,6 @@ const log = require('../utils/logger').logger('AUTH');
 // as a wrong password. Without it, response latency reveals which emails exist.
 const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
 
-// n8n's user table has changed shape across major versions — roleSlug is 2.x,
-// 1.x used a separate role relation. Probe the schema once and build the SELECT
-// from the columns that actually exist, so login keeps working on either.
-let userColumnsPromise = null;
-function getUserColumns() {
-    if (!userColumnsPromise) {
-        userColumnsPromise = pool
-            .query(
-                `SELECT column_name FROM information_schema.columns
-                 WHERE table_schema = 'public' AND table_name = 'user'`
-            )
-            .then((r) => new Set(r.rows.map((x) => x.column_name)))
-            .catch((err) => {
-                userColumnsPromise = null; // allow a retry on the next login
-                throw err;
-            });
-    }
-    return userColumnsPromise;
-}
 
 exports.login = async (req, res) => {
     const { email, password } = req.body;
@@ -37,18 +18,7 @@ exports.login = async (req, res) => {
     }
 
     try {
-        const columns = await getUserColumns();
-        const optional = ['disabled', 'mfaEnabled', 'roleSlug'].filter((c) => columns.has(c));
-        const selectList = ['id', 'email', 'password', '"firstName"', '"lastName"']
-            .concat(optional.map((c) => `"${c}"`))
-            .join(', ');
-
-        const dbRes = await pool.query(
-            `SELECT ${selectList} FROM "user" WHERE email = $1`,
-            [email]
-        );
-
-        const user = dbRes.rows[0];
+        const user = await userDao.findByEmail(email);
 
         // Always run a comparison, even with no user, to keep the timing uniform.
         const isMatch = await bcrypt.compare(password, user ? user.password : DUMMY_HASH);

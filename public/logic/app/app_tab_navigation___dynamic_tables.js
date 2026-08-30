@@ -21,6 +21,7 @@ window.switchTab = async function(tabName) {
     if (activeBtn) {
         activeBtn.classList.add('active');
         activeBtn.setAttribute('aria-selected', 'true');
+        window.UI?.revealTab(activeBtn);
     }
 
     const thead = document.getElementById('tableHeader') || document.getElementById('table-head');

@@ -886,6 +886,179 @@ const MIGRATIONS = [
         ]
     },
 
+    {
+        id: '021-integration-credentials',
+        sql: [
+            // OAuth credentials for the outside services a deployment connects
+            // to. Currently one: the n8n documentation MCP server.
+            //
+            // `user_id` is nullable and null means "this deployment", which is
+            // how it is used today. The column exists now rather than later
+            // because the alternative is a migration on a table holding live
+            // credentials, and because it makes the uniqueness constraint say
+            // the right thing from the start: one credential per provider per
+            // owner, where the deployment is an owner like any other.
+            //
+            // The docs service serves public documentation, so a per-user
+            // credential buys no privacy there — every reader gets the same
+            // page. It is left possible because the next provider may not be
+            // like that.
+            `CREATE TABLE IF NOT EXISTS integration_credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                user_id TEXT,
+                client_id TEXT NOT NULL,
+                refresh_token TEXT,
+                access_token TEXT,
+                access_expires_at TEXT,
+                connected_by TEXT,
+                connected_at TEXT NOT NULL,
+                updated_at TEXT
+            )`,
+
+            // A partial index, because SQLite treats every NULL as distinct: a
+            // plain UNIQUE(provider, user_id) would happily store the same
+            // deployment-level credential a hundred times over.
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_deployment ' +
+                'ON integration_credentials(provider) WHERE user_id IS NULL',
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_user ' +
+                'ON integration_credentials(provider, user_id) WHERE user_id IS NOT NULL'
+        ]
+    },
+
+    {
+        // NOTE, later: `summary` and `summarised_until` below are no longer
+        // written or read by anything. The fold that filled them was removed —
+        // it dropped the record of which analysis produced which number, which
+        // is the one thing a follow-up question needs — and the model now reads
+        // the thread itself. See dao/conversationsDao and ai/history.js.
+        //
+        // The columns stay because this migration has shipped and its id is
+        // already recorded on every existing replica. Dropping a column in
+        // SQLite rebuilds the table, which is a real risk taken for no gain: two
+        // unread columns cost nothing, and editing a migration that has run is
+        // the mistake this whole list exists to prevent.
+        id: '022-chat-conversations-and-memory',
+        sql: [
+            // ── Conversations ────────────────────────────────────────────
+            //
+            // The chat was one endless thread per user, so the assistant's
+            // context was "your last ten messages", whatever they were about.
+            // Ask about queue lag on Monday and error rates on Thursday and the
+            // Thursday answer arrives with Monday still in the prompt — which is
+            // not just noise, it actively misleads: a model given an unrelated
+            // earlier table tends to reconcile the two.
+            //
+            // `summary` is the part that makes a long thread survivable. Beyond
+            // the recent window the older turns are folded into prose, once,
+            // rather than resent in full forever. `summarised_until` records the
+            // id of the last message it covers, so folding is resumable and
+            // never counts a message twice.
+            `CREATE TABLE IF NOT EXISTS dashboard_chat_conversations (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                title TEXT,
+                summary TEXT,
+                summarised_until INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )`,
+
+            // ── Memory ───────────────────────────────────────────────────
+            //
+            // What survives a new conversation. Written by the assistant through
+            // a tool, never inferred behind the user's back, and listed in
+            // Settings where it can be deleted — a memory the person it is about
+            // cannot see or remove is a liability rather than a feature.
+            //
+            // Deliberately small and textual. This is not a profile store: it
+            // holds sentences like "reports on the Call Center folder" that
+            // change how an answer should be worded, and it is capped so it can
+            // never grow into a second prompt.
+            `CREATE TABLE IF NOT EXISTS dashboard_user_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source_conversation_id TEXT,
+                created_at TEXT NOT NULL,
+                used_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            )`,
+
+            'CREATE INDEX IF NOT EXISTS idx_conversations_user ' +
+                'ON dashboard_chat_conversations(user_id, archived, updated_at)',
+            'CREATE INDEX IF NOT EXISTS idx_memories_user ' +
+                'ON dashboard_user_memories(user_id, created_at)',
+            // The same sentence twice is one memory. Case-folded, because the
+            // model will not reproduce its own wording exactly.
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ' +
+                'ON dashboard_user_memories(user_id, lower(content))'
+        ],
+        columns: [
+            // Nullable, and null means "written before conversations existed".
+            // Those rows are adopted into one migrated conversation by
+            // conversationsDao rather than by this migration, because deciding
+            // where a year of history belongs is application logic and not a
+            // schema change.
+            ['dashboard_chat_history', 'conversation_id', 'TEXT']
+        ]
+    },
+
+    {
+        // Split from 022 for the reason 011 and 012 are split: the runner
+        // applies a migration's `sql` before its `columns`, so an index naming a
+        // column added in the same migration runs first and fails.
+        id: '023-chat-conversation-index',
+        sql: [
+            // Every read of a thread is "this conversation, oldest first". The
+            // existing (user_id, created_at) index cannot serve that — it orders
+            // the user's whole history, across every conversation they have.
+            'CREATE INDEX IF NOT EXISTS idx_chat_conversation ' +
+                'ON dashboard_chat_history(conversation_id, id)'
+        ]
+    },
+
+
+    {
+        id: '024-dashboard-secrets',
+        sql: [
+            // Settings that are secrets, kept apart from `dashboard_settings`.
+            //
+            // The separation is the whole point and it is not tidiness. Every
+            // value in `dashboard_settings` is served wholesale to the browser
+            // by `GET /api/settings` — that is what it is for — so an API key
+            // put in there would be readable by any authenticated page, in a
+            // response nobody would think to audit. A second table means the
+            // read path for a secret has to be written on purpose.
+            //
+            // Same rule as integration_credentials: two readers, one that may
+            // describe and one that may spend. See dao/aiConfigDao.
+            `CREATE TABLE IF NOT EXISTS dashboard_secrets (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
+            )`
+        ]
+    },
+
+    {
+        id: '025-conversation-title-generated',
+        columns: [
+            // Whether the title is the one the model wrote from the opening
+            // exchange, or a placeholder nobody has replaced yet.
+            //
+            // A flag rather than a comparison against the first question,
+            // because the two things it separates are not textual: a person who
+            // renames a thread has also "settled" its title, and their choice
+            // must survive the naming pass that runs after the next answer.
+            // `rename` sets this to 1 for exactly that reason.
+            ['dashboard_chat_conversations', 'title_generated', 'INTEGER NOT NULL DEFAULT 0']
+        ]
+    }
+
 ];
 
 // Indexes that exist to serve a one-time migration and are dropped by the code

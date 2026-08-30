@@ -1,4 +1,5 @@
 const localDb = require('./localDb');
+const dao = require('../dao/alertEngineDao');
 const { RULE_TYPES, readHeaders } = require('../utils/alertValidation');
 const { groupingClause } = require('../utils/grouping');
 const log = require('../utils/logger').logger('ALERT');
@@ -66,7 +67,6 @@ function ruleScope(rule, column) {
     };
 }
 
-const FAILED = "e.status IN ('error', 'crashed')";
 
 /**
  * A link straight into the n8n editor, when the dashboard has been told where
@@ -103,20 +103,9 @@ async function evaluateRule(rule, asOfIso) {
         //
         // Ignored fingerprints are excluded here rather than filtered later, so
         // "ignore" genuinely stops the alert instead of merely hiding the row.
-        const rows = await localDb.query(
-            `SELECT f.fingerprint, f.normalized_message, f.sample_message, f.first_seen,
-                    COUNT(a.id) AS occurrences,
-                    COUNT(DISTINCT a.workflow_id) AS workflows
-               FROM error_fingerprints f
-               JOIN execution_error_analytics a ON a.fingerprint = f.fingerprint
-               JOIN execution_entity e ON e.id = a.id
-              WHERE f.first_seen >= ?
-                AND f.status NOT IN ('ignored', 'resolved')
-                AND a.timestamp >= ?${scope.sql}
-              GROUP BY f.fingerprint
-             HAVING occurrences >= ?`,
-            [windowStart, windowStart, ...scope.params, rule.min_executions]
-        );
+        const rows = { rows: await dao.newFingerprints({
+            scope, windowStart, minOccurrences: rule.min_executions
+        }) };
         return rows.rows.map((r) => ({
             subject: r.fingerprint,
             subject_label: (r.normalized_message || '').slice(0, 120),
@@ -133,18 +122,9 @@ async function evaluateRule(rule, asOfIso) {
     }
 
     case 'error_rate': {
-        const rows = await localDb.query(
-            `SELECT e."workflowId" AS id, w.name,
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN ${FAILED} THEN 1 ELSE 0 END) AS errors
-               FROM execution_entity e
-               JOIN workflow_entity w ON w.id = e."workflowId"
-              WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-                AND IFNULL(w."isArchived", 0) = 0${scope.sql}
-              GROUP BY e."workflowId"
-             HAVING total >= ?`,
-            [windowStart, asOfIso, ...scope.params, rule.min_executions]
-        );
+        const rows = { rows: await dao.errorRates({
+            scope, windowStart, asOfIso, minExecutions: rule.min_executions
+        }) };
         return rows.rows
             .map((r) => ({ ...r, rate: (r.errors / r.total) * 100 }))
             .filter((r) => r.rate >= rule.threshold)
@@ -166,33 +146,9 @@ async function evaluateRule(rule, asOfIso) {
         // the window here says how overdue to tolerate, not how much history to
         // learn from, and a one-hour window cannot measure a daily workflow.
         const since = new Date(asOfMs - 30 * 86400000).toISOString();
-        const rows = await localDb.query(
-            `WITH runs AS (
-                 SELECT e."workflowId" AS wf,
-                        (julianday(e."startedAt") - julianday(
-                             LAG(e."startedAt") OVER (PARTITION BY e."workflowId"
-                                                      ORDER BY e."startedAt")
-                        )) * 86400.0 AS gap
-                   FROM execution_entity e
-                  WHERE e."startedAt" >= ?${scope.sql}
-             ),
-             g AS (SELECT wf, gap FROM runs WHERE gap IS NOT NULL AND gap > 0),
-             r AS (SELECT wf, gap, ROW_NUMBER() OVER (PARTITION BY wf ORDER BY gap) rn,
-                          COUNT(*) OVER (PARTITION BY wf) n FROM g),
-             med AS (SELECT wf, n, MAX(CASE WHEN rn = 1 + CAST((n - 1) * 0.5 AS INTEGER)
-                                            THEN gap END) AS median_gap
-                       FROM r GROUP BY wf, n)
-             SELECT w.id, w.name, med.median_gap, med.n AS gaps,
-                    (SELECT MAX(x."startedAt") FROM execution_entity x
-                      WHERE x."workflowId" = w.id) AS last_run,
-                    (SELECT MAX(st.latest_event) FROM workflow_statistics st
-                      WHERE st.workflow_id = w.id) AS last_event
-               FROM workflow_entity w
-               JOIN med ON med.wf = w.id
-              WHERE w.active = 1 AND IFNULL(w."isArchived", 0) = 0
-                AND med.n >= ?`,
-            [since, ...scope.params, rule.min_executions]
-        );
+        const rows = { rows: await dao.cadenceAndLastRun({
+            scope, sinceIso: since, minGaps: rule.min_executions
+        }) };
         return rows.rows
             .map((r) => {
                 const last = [r.last_run, r.last_event].filter(Boolean).sort().pop();
@@ -217,19 +173,7 @@ async function evaluateRule(rule, asOfIso) {
     }
 
     case 'queue_lag': {
-        const rows = await localDb.query(
-            `WITH v AS (
-                 SELECT (julianday(e."startedAt") - julianday(e."createdAt")) * 86400000.0 AS ms
-                   FROM execution_entity e
-                  WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-                    AND e."createdAt" IS NOT NULL${scope.sql}
-             ),
-             r AS (SELECT ms, ROW_NUMBER() OVER (ORDER BY ms) rn, COUNT(*) OVER () n FROM v)
-             SELECT n, MAX(CASE WHEN rn = 1 + CAST((n - 1) * 0.95 AS INTEGER) THEN ms END) AS p95
-               FROM r GROUP BY n`,
-            [windowStart, asOfIso, ...scope.params]
-        );
-        const row = rows.rows[0];
+                const row = await dao.queueLagP95({ scope, windowStart, asOfIso });
         if (!row || row.n < rule.min_executions || row.p95 === null) return [];
         if (row.p95 < rule.threshold) return [];
         return [{
@@ -243,15 +187,10 @@ async function evaluateRule(rule, asOfIso) {
     }
 
     case 'volume_drop': {
-        const rows = await localDb.query(
-            `SELECT
-                 SUM(CASE WHEN e."startedAt" >= ? THEN 1 ELSE 0 END) AS current,
-                 SUM(CASE WHEN e."startedAt" < ? THEN 1 ELSE 0 END) AS previous
-               FROM execution_entity e
-              WHERE e."startedAt" >= ? AND e."startedAt" <= ?${scope.sql}`,
-            [windowStart, windowStart, previousStart, asOfIso, ...scope.params]
-        );
-        const { current, previous } = rows.rows[0] || {};
+        const volume = await dao.volumeThisWindowAndPrevious({
+            scope, windowStart, previousStart, asOfIso
+        });
+        const { current, previous } = volume;
         // The comparison is meaningless without a baseline worth comparing to.
         if (!previous || previous < rule.min_executions) return [];
         const pct = (current / previous) * 100;
@@ -268,20 +207,9 @@ async function evaluateRule(rule, asOfIso) {
     }
 
     case 'payload_spike': {
-        const rows = await localDb.query(
-            `SELECT e."workflowId" AS id, w.name,
-                    AVG(CASE WHEN e."startedAt" >= ? THEN e."jsonSizeBytes" END) AS now_avg,
-                    AVG(CASE WHEN e."startedAt" < ? THEN e."jsonSizeBytes" END) AS then_avg,
-                    SUM(CASE WHEN e."startedAt" >= ? THEN 1 ELSE 0 END) AS now_n,
-                    SUM(CASE WHEN e."startedAt" < ? THEN 1 ELSE 0 END) AS then_n
-               FROM execution_entity e
-               JOIN workflow_entity w ON w.id = e."workflowId"
-              WHERE e."startedAt" >= ? AND e."startedAt" <= ?
-                AND e."jsonSizeBytes" IS NOT NULL${scope.sql}
-              GROUP BY e."workflowId"`,
-            [windowStart, windowStart, windowStart, windowStart,
-                previousStart, asOfIso, ...scope.params]
-        );
+        const rows = { rows: await dao.payloadSizes({
+            scope, windowStart, previousStart, asOfIso
+        }) };
         return rows.rows
             .filter((r) => r.now_n >= rule.min_executions && r.then_n >= rule.min_executions &&
                 r.then_avg > 0)
@@ -304,21 +232,8 @@ async function evaluateRule(rule, asOfIso) {
         // Reuses the same reasoning as the storage panel: bounded to what n8n is
         // still holding, so the replica's own longer history does not read as
         // unbounded growth.
-        const horizonRow = await localDb.query(
-            "SELECT value FROM dashboard_settings WHERE key = 'source_oldest_execution_id'"
-        );
-        const raw = horizonRow.rows[0] && horizonRow.rows[0].value;
-        const horizon = raw === undefined || raw === null ? NaN : Number(raw);
-        const bound = Number.isFinite(horizon) ? ` AND e.id >= ${horizon}` : '';
-
-        const rows = await localDb.query(
-            `SELECT SUM(e."jsonSizeBytes") + SUM(IFNULL(e."binaryDataSizeBytes", 0)) AS bytes,
-                    COUNT(*) AS n
-               FROM execution_entity e
-              WHERE e."jsonSizeBytes" IS NOT NULL${bound}${scope.sql}`,
-            scope.params
-        );
-        const bytes = (rows.rows[0] && rows.rows[0].bytes) || 0;
+        const retained = await dao.retainedBytes({ scope });
+        const bytes = retained.bytes || 0;
         const limit = rule.threshold * 1073741824;
         if (bytes < limit) return [];
         return [{
@@ -326,8 +241,8 @@ async function evaluateRule(rule, asOfIso) {
             subject_label: 'Storage',
             title: `n8n is retaining ${(bytes / 1073741824).toFixed(2)} GB of execution data`,
             body: `Past the ${rule.threshold} GB you asked to be told about, across ` +
-                `${rows.rows[0].n} retained executions.`,
-            payload: { bytes, threshold_bytes: limit, executions: rows.rows[0].n }
+                `${retained.n} retained executions.`,
+            payload: { bytes, threshold_bytes: limit, executions: retained.n }
         }];
     }
 
@@ -421,21 +336,6 @@ async function deliver(channel, event) {
     }
 }
 
-async function recordChannelResult(channelId, result) {
-    if (!channelId) return;
-    if (result.ok) {
-        await localDb.execute(
-            'UPDATE alert_channels SET last_ok_at = ?, last_error = NULL WHERE id = ?',
-            [new Date().toISOString(), channelId]
-        );
-    } else {
-        await localDb.execute(
-            'UPDATE alert_channels SET last_error = ?, last_error_at = ? WHERE id = ?',
-            [String(result.error).slice(0, 500), new Date().toISOString(), channelId]
-        );
-    }
-}
-
 // ==========================================================================
 // The pass
 // ==========================================================================
@@ -445,21 +345,14 @@ async function recordChannelResult(channelId, result) {
  * clock, for the reason spelled out at the top of the file.
  */
 async function dataAsOf() {
-    const r = await localDb.query('SELECT MAX("startedAt") AS newest FROM execution_entity');
-    return (r.rows[0] && r.rows[0].newest) || null;
+    return dao.newestExecutionAt();
 }
 
 /** Whether this subject has already been told about recently enough. */
 async function isSuppressed(dedupeKey, cooldownMinutes, nowIso) {
     if (!cooldownMinutes) return false;
-    const since = new Date(Date.parse(nowIso) - cooldownMinutes * 60000).toISOString();
-    const r = await localDb.query(
-        `SELECT 1 FROM alert_events
-          WHERE dedupe_key = ? AND fired_at >= ? AND delivery_status <> 'suppressed'
-          LIMIT 1`,
-        [dedupeKey, since]
-    );
-    return r.rows.length > 0;
+    const sinceIso = new Date(Date.parse(nowIso) - cooldownMinutes * 60000).toISOString();
+    return dao.hasRecentFiring({ dedupeKey, sinceIso });
 }
 
 /**
@@ -521,12 +414,7 @@ async function recordFirings(force) {
         return { status: 'stale', staleness_ms: staleness, fired: 0 };
     }
 
-    const rules = await localDb.query(
-        `SELECT r.*, c.id AS ch_id, c.enabled AS ch_enabled
-           FROM alert_rules r
-           LEFT JOIN alert_channels c ON c.id = r.channel_id
-          WHERE r.enabled = 1`
-    );
+    const rules = { rows: await dao.enabledRules() };
 
     const nowIso = new Date().toISOString();
     let fired = 0;
@@ -554,16 +442,7 @@ async function recordFirings(force) {
             // rule wired to nothing still fired, and the events table is where
             // someone finds out why they were never told.
             const deliverable = Boolean(rule.ch_id && rule.ch_enabled);
-            await localDb.execute(
-                `INSERT INTO alert_events
-                    (rule_id, rule_name, fired_at, dedupe_key, subject, subject_label,
-                     title, body, payload, delivery_status, delivery_error, attempts)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)`,
-                [rule.id, rule.name, nowIso, dedupeKey, finding.subject,
-                    finding.subject_label, finding.title, finding.body,
-                    JSON.stringify(finding.payload || {}),
-                    deliverable ? 'pending' : 'no_channel']
-            );
+            await dao.insertEvent({ rule, nowIso, dedupeKey, finding, deliverable });
             fired++;
         }
     }
@@ -585,17 +464,7 @@ async function recordFirings(force) {
  * only for the two short writes that record each outcome.
  */
 async function flushDeliveries() {
-    const waiting = await localDb.query(
-        `SELECT e.*, c.type AS ch_type, c.config AS ch_config, c.id AS ch_id
-           FROM alert_events e
-           JOIN alert_rules r ON r.id = e.rule_id
-           JOIN alert_channels c ON c.id = r.channel_id
-          WHERE e.delivery_status IN ('pending', 'failed')
-            AND e.attempts < ? AND c.enabled = 1
-          ORDER BY e.fired_at DESC
-          LIMIT 20`,
-        [MAX_DELIVERY_ATTEMPTS]
-    );
+    const waiting = { rows: await dao.pendingDeliveries({ maxAttempts: MAX_DELIVERY_ATTEMPTS }) };
 
     let delivered = 0;
     let failed = 0;
@@ -604,14 +473,10 @@ async function flushDeliveries() {
         const result = await deliver({ type: event.ch_type, config: event.ch_config }, event);
         if (result.ok) delivered++; else failed++;
         await localDb.exclusive(async () => {
-            await recordChannelResult(event.ch_id, result);
-            await localDb.execute(
-                `UPDATE alert_events
-                    SET delivery_status = ?, delivery_error = ?, attempts = attempts + 1
-                  WHERE id = ?`,
-                [result.ok ? 'sent' : 'failed',
-                    result.ok ? null : String(result.error).slice(0, 500), event.id]
-            );
+            await dao.recordChannelOutcome({
+                channelId: event.ch_id, ok: result.ok, error: result.error
+            });
+            await dao.markDelivery({ eventId: event.id, ok: result.ok, error: result.error });
         });
     }
 
@@ -619,10 +484,7 @@ async function flushDeliveries() {
 }
 
 async function pruneEvents() {
-    await localDb.execute(
-        `DELETE FROM alert_events WHERE id <= (SELECT MAX(id) FROM alert_events) - ?`,
-        [EVENT_HISTORY]
-    );
+    await dao.pruneEvents({ keep: EVENT_HISTORY });
 }
 
 module.exports = {

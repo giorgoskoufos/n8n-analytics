@@ -149,6 +149,25 @@ async function filterVisibleWorkflows(scope, workflowIds) {
     return visible;
 }
 
+/**
+ * The visible workflow ids as a list, or null for an unrestricted caller.
+ *
+ * Everything else here expresses scope as a SQL fragment, which is the right
+ * shape when the query is being built around it. The assistant's read-only
+ * connection cannot use that: its restriction lives inside temp views, as a
+ * membership test against a table it fills per request, so it needs the ids
+ * themselves (config/readonlyDb).
+ *
+ * `null` means unrestricted and is not the same as an empty array — one is "no
+ * limit", the other is "sees nothing". Returning `[]` for an owner would be a
+ * silent outage; returning `null` for a member would be a leak.
+ */
+async function visibleWorkflowIds(scope) {
+    if (!scope || scope.unrestricted) return null;
+    const r = await localDb.query(VISIBLE_WORKFLOWS_SQL, [scope.userId]);
+    return r.rows.map((row) => row.workflow_id);
+}
+
 module.exports = {
     UNRESTRICTED_ROLES,
     VISIBLE_WORKFLOWS_SQL,
@@ -156,5 +175,6 @@ module.exports = {
     invalidateScopeCache,
     scopeClause,
     canSeeWorkflow,
-    filterVisibleWorkflows
+    filterVisibleWorkflows,
+    visibleWorkflowIds
 };

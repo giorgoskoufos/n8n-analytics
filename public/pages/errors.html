@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Error Intelligence - n8n Dashboard</title>
     <script src="../logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
@@ -63,9 +64,9 @@
 
             <div id="customRangeContainer" class="field">
                 <span class="label shrink-0">Custom</span>
-                <input type="date" id="errorRangeStart" class="w-28" aria-label="Range start">
-                <span style="color:var(--ink-3)">—</span>
-                <input type="date" id="errorRangeEnd" class="w-28" aria-label="Range end">
+                <input type="date" id="errorRangeStart" aria-label="Range start">
+                <span class="field-sep" aria-hidden="true">—</span>
+                <input type="date" id="errorRangeEnd" aria-label="Range end">
             </div>
 
             <!-- Only shown while something is filtered. A permanently visible
@@ -96,14 +97,21 @@
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-            <div class="card card-pad flex flex-col" style="height:26rem">
+            <!-- 26rem is what makes this line up with the table beside it, and
+                 the two are only beside each other at `lg`. Stacked on a phone
+                 the chart still needs a height (a canvas has no content to be
+                 sized by) but a shorter one is plenty. -->
+            <div class="card card-pad flex flex-col h-80 lg:h-[26rem]">
                 <h2 class="card-title mb-3">Error categories</h2>
                 <div class="flex-1 relative min-h-0">
                     <canvas id="categoryChart"></canvas>
                 </div>
             </div>
 
-            <div class="lg:col-span-2 card card-clip flex flex-col" style="height:26rem">
+            <!-- And the table takes the height its rows need. Fixed at 26rem it
+                 was four rows and 250px of empty card, on the screen with the
+                 least room to spare. -->
+            <div class="lg:col-span-2 card card-clip flex flex-col max-h-[26rem] lg:h-[26rem]">
                 <div class="card-head">
                     <h2 class="card-title">Workflow health</h2>
                     <span class="label">success rate over the range</span>

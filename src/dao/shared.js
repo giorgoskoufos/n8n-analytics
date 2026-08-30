@@ -37,6 +37,51 @@
 const localDb = require('../config/localDb');
 const { scopeClause } = require('../utils/scope');
 const { groupingClause } = require('../utils/grouping');
+const { parseDateRange } = require('../utils/validate');
+
+const DEFAULT_RANGE_DAYS = 7;
+const MAX_RANGE_DAYS = 60;
+/**
+ * The window an endpoint works in, plus the bucket grid for its time series.
+ *
+ * The grid is anchored on a whole bucket boundary rather than on the requested
+ * start, so bucket zero covers the same span as every other one. An unanchored
+ * grid makes the first point of every chart a partial bucket, which reads as a
+ * dip that is really just a shorter measurement.
+ */
+function resolveWindow(query, { defaultDays = DEFAULT_RANGE_DAYS, maxDays = MAX_RANGE_DAYS } = {}) {
+    const range = parseDateRange(query.startDate, query.endDate);
+    if (!range.ok) return { ok: false, error: range.error };
+
+    const end = range.end || new Date();
+    let start = range.start || new Date(end.getTime() - defaultDays * 86400000);
+
+    // Capped for the same reason getMetrics caps: the bucket arithmetic below is
+    // linear in the number of buckets, and nothing on the front end can render
+    // more than a few hundred points usefully.
+    const maxMs = maxDays * 86400000;
+    if (end.getTime() - start.getTime() > maxMs) start = new Date(end.getTime() - maxMs);
+
+    // Hourly up to four days, daily beyond — the same threshold the main
+    // dashboard uses, so a chart here lines up with the one there.
+    const stepMs = (end.getTime() - start.getTime()) > 4 * 86400000 ? 86400000 : 3600000;
+    const originMs = Math.floor(start.getTime() / stepMs) * stepMs;
+    const count = Math.max(1, Math.ceil((end.getTime() - originMs) / stepMs));
+
+    return {
+        ok: true,
+        startIso: start.toISOString(),
+        endIso: end.toISOString(),
+        originIso: new Date(originMs).toISOString(),
+        originMs,
+        stepMs,
+        count
+    };
+}
+
+/** Relative ISO timestamps. Used by every DAO that defaults its own window. */
+const isoDaysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
+const isoHoursAgo = (hours) => new Date(Date.now() - hours * 3600000).toISOString();
 
 /** Milliseconds between two SQLite datetime expressions. */
 const msBetween = (a, b) => `(julianday(${a}) - julianday(${b})) * 86400000.0`;
@@ -76,7 +121,7 @@ function percentileColumns(valueAlias) {
  * @param {object}  opts
  * @param {object}  opts.scope     the caller's scope descriptor; `null` only for
  *                                 an explicitly unrestricted caller
- * @param {object} [opts.grouping] `{ folder, tag, project }`, already validated
+ * @param {object} [opts.grouping] `{ workflow, folder, tag, project }`, already validated
  * @param {string}  column         the workflow-id column to restrict, qualified
  */
 function filterFor({ scope, grouping = {} }, column) {
@@ -154,7 +199,32 @@ function modeClause(mode) {
         : { sql: '', params: [] };
 }
 
+/**
+ * A rejection a DAO can raise without knowing what HTTP is.
+ *
+ * Most validation belongs in the controller, where the request is. Some of it
+ * genuinely cannot go there: a drill-down that resolves an id and finds nothing,
+ * or a filter whose validity depends on a value the query itself returns. Those
+ * checks have to run next to the data.
+ *
+ * So the DAO throws this and the controller translates the `status` it carries.
+ * The alternative — returning `{ ok: false, error }` and asking every caller to
+ * remember to check — is the shape that produces a 200 with a body describing a
+ * failure the first time someone forgets.
+ */
+function daoError(status, message) {
+    const err = new Error(message);
+    err.status = status;
+    err.expected = true;
+    return err;
+}
+
+const badRequest = (message) => daoError(400, message);
+const notFound = (message) => daoError(404, message);
+
 module.exports = {
     msBetween, bucketExpr, bucketParams, percentileColumns,
-    filterFor, densify, coverageOf, modeClause
+    filterFor, densify, coverageOf, modeClause,
+    isoDaysAgo, isoHoursAgo, resolveWindow,
+    daoError, badRequest, notFound
 };
