@@ -22,7 +22,7 @@
     <aside class="shell-nav" id="appNav">
         <!-- Brand -->
         <div class="flex items-center gap-2.5 px-4 h-[60px] shrink-0" style="border-bottom:1px solid var(--line)">
-            <img src="/assets/n8n_db.svg" alt="" class="w-7 h-7 object-contain shrink-0">
+            <img src="/assets/n8n_db.png" alt="" class="w-9 h-9 object-contain shrink-0">
             <span class="nav-label font-bold text-[15px]" style="color:var(--ink-1)">n8n&nbsp;Dashboard</span>
         </div>
 
@@ -43,7 +43,8 @@
                 <i class="fa-solid fa-magnifying-glass-chart nav-icon"></i><span class="nav-label">Insights</span>
             </a>
             <a href="pages/errors.html" id="nav-errors" class="nav-item">
-                <i class="fa-solid fa-triangle-exclamation nav-icon"></i><span class="nav-label">Error Intelligence</span>
+                <i class="fa-solid fa-triangle-exclamation nav-icon"></i><span class="nav-label">Error
+                    Intelligence</span>
             </a>
             <a href="pages/roi.html" id="nav-roi" class="nav-item">
                 <i class="fa-solid fa-clock nav-icon"></i><span class="nav-label">ROI Analytics</span>
@@ -111,8 +112,8 @@
       the CSS rotates the chevron off `data-collapsed`, so there is no second
       copy of "is it open" to drift from the first.
     -->
-    <button type="button" class="nav-handle" data-action="toggleNavCollapse"
-            aria-controls="appNav" aria-expanded="true" aria-label="Toggle sidebar">
+    <button type="button" class="nav-handle" data-action="toggleNavCollapse" aria-controls="appNav" aria-expanded="true"
+        aria-label="Toggle sidebar">
         <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
     </button>
 </template>
@@ -125,14 +126,15 @@
                  there, and a button that opens something already open is a
                  button that teaches people to distrust buttons. -->
             <button type="button" class="btn lg:hidden shrink-0" data-action="openNavDrawer"
-                    aria-label="Open navigation" style="width:38px;padding:0">
+                aria-label="Open navigation" style="width:38px;padding:0">
                 <i class="fa-solid fa-bars"></i>
             </button>
             <div class="min-w-0">
                 <div id="headerCrumbs"></div>
                 <h1 id="headerTitle" class="text-xl md:text-2xl font-bold leading-tight truncate"
                     style="color:var(--ink-1)">n8n Dashboard</h1>
-                <p id="headerSubtitle" class="text-xs md:text-sm mt-0.5" style="color:var(--ink-3)">Real-time workflow analytics</p>
+                <p id="headerSubtitle" class="text-xs md:text-sm mt-0.5" style="color:var(--ink-3)">Real-time workflow
+                    analytics</p>
             </div>
         </div>
         <div id="headerActions" class="flex items-center gap-2 shrink-0"></div>
@@ -160,15 +162,14 @@
     interruptible. Announcing every streamed token would be neither.
 -->
 <template id="tpl-assistant">
-    <button id="assistantLauncher" class="assistant-launcher" type="button"
-            aria-controls="assistantPanel" aria-expanded="false"
-            aria-label="Open the assistant">
+    <button id="assistantLauncher" class="assistant-launcher" type="button" aria-controls="assistantPanel"
+        aria-expanded="false" aria-label="Open the assistant">
         <i class="fa-solid fa-robot" aria-hidden="true"></i>
         <span id="assistantUnread" class="dot" hidden></span>
     </button>
 
-    <section id="assistantPanel" class="assistant-panel" hidden
-             role="dialog" aria-modal="false" aria-labelledby="assistantTitle">
+    <section id="assistantPanel" class="assistant-panel" hidden role="dialog" aria-modal="false"
+        aria-labelledby="assistantTitle">
         <div class="assistant-resize" id="assistantResize" aria-hidden="true"></div>
 
         <!--
@@ -178,35 +179,32 @@
         -->
         <header class="assistant-head" style="position:relative">
             <h2 class="sr-only" id="assistantTitle">Assistant</h2>
-            <button class="assistant-thread" type="button" data-assistant="threads"
-                    aria-haspopup="listbox" aria-expanded="false"
-                    aria-controls="assistantThreads" aria-label="Switch conversation">
+            <button class="assistant-thread" type="button" data-assistant="threads" aria-haspopup="listbox"
+                aria-expanded="false" aria-controls="assistantThreads" aria-label="Switch conversation">
                 <span class="msg-avatar" aria-hidden="true"><i class="fa-solid fa-robot"></i></span>
                 <span class="thread-title" id="assistantThreadTitle">Assistant</span>
                 <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
             </button>
 
-            <div id="assistantThreads" class="tag-menu" role="listbox"
-                 aria-label="Conversations" hidden></div>
+            <div id="assistantThreads" class="tag-menu" role="listbox" aria-label="Conversations" hidden></div>
 
             <div class="assistant-head-actions">
-                <button class="assistant-icon-btn" type="button" data-assistant="new"
-                        title="New conversation" aria-label="Start a new conversation">
+                <button class="assistant-icon-btn" type="button" data-assistant="new" title="New conversation"
+                    aria-label="Start a new conversation">
                     <i class="fa-solid fa-pen-to-square" aria-hidden="true"></i>
                 </button>
                 <a class="assistant-icon-btn" id="assistantExpand" href="pages/chat.html"
-                   title="Open the full conversation" aria-label="Open the full conversation">
+                    title="Open the full conversation" aria-label="Open the full conversation">
                     <i class="fa-solid fa-up-right-and-down-left-from-center" aria-hidden="true"></i>
                 </a>
-                <button class="assistant-icon-btn" type="button" data-assistant="close"
-                        title="Close" aria-label="Close the assistant">
+                <button class="assistant-icon-btn" type="button" data-assistant="close" title="Close"
+                    aria-label="Close the assistant">
                     <i class="fa-solid fa-xmark" aria-hidden="true"></i>
                 </button>
             </div>
         </header>
 
-        <div id="assistantLog" class="assistant-log" role="log"
-             aria-labelledby="assistantTitle" tabindex="0"></div>
+        <div id="assistantLog" class="assistant-log" role="log" aria-labelledby="assistantTitle" tabindex="0"></div>
 
         <!-- Progress, for people who are not watching the panel. Never the
              tokens themselves — a screen reader reciting a streamed answer three
@@ -224,24 +222,19 @@
                 <!-- The `@` picker. `aria-activedescendant` on the textarea
                      points into this list, which is how a combobox keeps focus
                      in the input while the arrow keys move a selection. -->
-                <div id="assistantTagMenu" class="tag-menu" role="listbox"
-                     aria-label="Tag something" hidden></div>
+                <div id="assistantTagMenu" class="tag-menu" role="listbox" aria-label="Tag something" hidden></div>
 
-                <textarea id="assistantInput" rows="1" maxlength="2000"
-                          placeholder="Ask about your workflows…"
-                          aria-label="Ask the assistant"
-                          aria-autocomplete="list" aria-expanded="false"
-                          aria-controls="assistantTagMenu"></textarea>
+                <textarea id="assistantInput" rows="1" maxlength="2000" placeholder="Ask about your workflows…"
+                    aria-label="Ask the assistant" aria-autocomplete="list" aria-expanded="false"
+                    aria-controls="assistantTagMenu"></textarea>
 
                 <div class="assistant-composer-row">
-                    <button class="assistant-icon-btn" type="button" data-assistant="tools"
-                            title="Tools" aria-label="Choose which tools to use"
-                            aria-expanded="false">
+                    <button class="assistant-icon-btn" type="button" data-assistant="tools" title="Tools"
+                        aria-label="Choose which tools to use" aria-expanded="false">
                         <i class="fa-solid fa-plus" aria-hidden="true"></i>
                     </button>
                     <span id="assistantToolHint" class="assistant-hint"></span>
-                    <button id="assistantSend" class="assistant-send" type="button"
-                            aria-label="Send">
+                    <button id="assistantSend" class="assistant-send" type="button" aria-label="Send">
                         <i class="fa-solid fa-arrow-up" aria-hidden="true"></i>
                     </button>
                     <button id="assistantStop" class="assistant-stop" type="button" hidden>
