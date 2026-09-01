@@ -113,7 +113,7 @@ Nothing in this section exists in n8n. Grouped by what they're for.
 | `users` | 001 | Local mirror of dashboard-authenticated users (`id`, `email`) — upserted on login, the row every `user_id` foreign key below points at |
 | `dashboard_settings` | 001 | Non-secret key/value settings, served wholesale to any authenticated page |
 | `dashboard_secrets` | 024 | Secrets, split into their own table on purpose — see [../security](../security#secrets) |
-| `workflow_settings` | 001, 002 | Per-workflow ROI inputs (time saved, hourly rate) an operator typed in |
+| `workflow_settings` | 001, 002, 026 | Per-workflow ROI inputs: `saved_time_seconds` and `hourly_rate`, plus the four `baseline_*` columns holding the manual job that figure was derived from. The division is one-way, so storing only its result would leave the Business case view unable to redisplay what anybody actually claimed. All four NULL means the figure was typed directly |
 
 **The AI assistant** — see [../ai](../ai) for how these are used
 

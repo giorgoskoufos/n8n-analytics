@@ -1057,6 +1057,31 @@ const MIGRATIONS = [
             // `rename` sets this to 1 for exactly that reason.
             ['dashboard_chat_conversations', 'title_generated', 'INTEGER NOT NULL DEFAULT 0']
         ]
+    },
+
+    {
+        // The manual job a workflow replaced, as the person described it.
+        //
+        // `saved_time_seconds` is a per-run figure, and it is derived: a month of
+        // human work divided by the executions n8n actually ran. The division is
+        // one-way — 1 sec/run could have come from any of a thousand different
+        // jobs — so storing only the result means the Business case view has
+        // nothing to redisplay. It would open on its defaults ("5 times per
+        // week, 30 minutes") over a workflow configured as something else
+        // entirely, which is not an empty form, it is a wrong answer with the
+        // Configured badge next to it.
+        //
+        // NULL on all four means the figure was typed in directly, in Per-run
+        // figures. That is a real state and has to stay distinguishable: the
+        // Business case view says so and offers its defaults, rather than
+        // inventing a baseline that was never claimed.
+        id: '026-roi-baseline',
+        columns: [
+            ['workflow_settings', 'baseline_frequency', 'REAL'],
+            ['workflow_settings', 'baseline_per', 'TEXT'],
+            ['workflow_settings', 'baseline_duration', 'REAL'],
+            ['workflow_settings', 'baseline_unit', 'TEXT']
+        ]
     }
 
 ];

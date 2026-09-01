@@ -82,10 +82,15 @@ writing `onclick=`.
 - `logic/settings/` — one file per settings section (`_fetch`, `_save`,
   `_nav`, `_system`, `_integrations`, `_ai`, `_memory`), loaded in order by
   `logic/settings.js`.
-- `logic/roi/` — `roi_overview.js`, `roi_config.js`, and `roi_math.mjs` — the
-  last one is a **pure** calculation module (human-time-per-run × frequency →
-  seconds saved), deliberately isolated so it can be unit-tested without a
-  DOM.
+- `logic/roi/` — `roi_overview.js`, `roi_config.js`, and `roi_math.mjs`. The
+  Configure tab has two mutually exclusive views of the same setting —
+  **Business case** (describe the manual job; the default) and **Per-run
+  figures** (type the number) — chosen once for the whole list and remembered
+  in `localStorage`. `roi_math.mjs` is a **pure** calculation module
+  (human-time-per-month ÷ measured executions → seconds saved), deliberately
+  isolated so it can be unit-tested without a DOM, and its period/unit lists
+  are asserted against the server's validator so a storable baseline is always
+  a computable one.
 - `logic/alerts.js`, `logic/errors.js`, `logic/insights.js` +
   `logic/insights_nav.js` — one page each. `insights_nav.js` exists
   specifically to split what used to be an 11-panel, 1128-line file into four

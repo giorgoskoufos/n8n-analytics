@@ -1,39 +1,47 @@
 /**
- * The Configure tab: two numbers per workflow, and a way to arrive at one of
- * them.
+ * The Configure tab: two ways of saying the same thing, and you pick one.
  *
- * ── What this replaced ───────────────────────────────────────────────────
+ * ── Why two views instead of one with a drawer ───────────────────────────
  *
- * A list in Settings, rendered from a template that set its own colours —
- * `bg-[#171717]`, `text-indigo-400`, `bg-green-900/40`, `bg-gray-700
- * hover:bg-indigo-600` — none of which appear anywhere else in this dashboard.
- * It was the F-24 §7 complaint in one file: a second design system, maintained
- * by nobody, that drifted from the first the moment either changed. Everything
- * here comes from the tokens in input.css.
+ * There is exactly one number the database wants — seconds saved per run — and
+ * two completely different ways a person arrives at it. Somebody who has
+ * already measured their process types the figure. Somebody who has not knows
+ * the job it replaced: "a person did this five times a week and it took half an
+ * hour."
  *
- * ── The calculator is the point of the tab ───────────────────────────────
+ * The previous version showed the first and hid the second behind a per-row
+ * "Work it out" button. That makes the harder, rarer path the default and the
+ * easier, commoner one a thing you have to discover — and it put both on screen
+ * at once for any row you opened, so the same figure had two controls competing
+ * to own it. Which one is the truth? The one you touched last, which is not
+ * something an interface should make you remember.
  *
- * It was four unlabelled-ish inputs, a reference number in a box, and a button
- * called "Apply Calculated Value" — which is a button that asks you to trust a
- * calculation you have not seen. Press it and a number appears in a different
- * control, several inches away, with no indication of how it got there or
- * whether it is sensible.
+ * So: one choice, made once, at the top of the tab.
  *
- * Three things changed and they are all the same thing:
+ *   Business case    the sentence. Default, because it is the one that needs
+ *                    no prior measurement, and the one that keeps working when
+ *                    the workflow's traffic changes.
+ *   Per-run figures  the number, typed.
  *
- *   1. **It is a sentence.** The inputs sit inside a claim about the world —
- *      "a person did this 5 times per week, and each time took 3 hours" —
- *      because that is a thing somebody can check against their memory. Four
- *      fields called Freq / Per / Duration / Unit are not.
+ * Both carry the hourly rate, because a view you cannot finish in is not a
+ * view, it is half of one.
  *
- *   2. **The arithmetic is on screen, before the button.** The monthly total,
- *      the execution count it is divided by, and the result all update as you
- *      type. So "Use this figure" confirms something already visible instead of
- *      being the only way to find out what the calculator thinks.
+ * ── Why the baseline is stored and not just its result ───────────────────
  *
- *   3. **It shows the divisor.** The single most confusing thing about the old
- *      version was that the answer depended on a number it displayed but never
- *      connected to anything. Now the division is written out.
+ * The division is one-way: 1 sec/run could have come from a thousand different
+ * jobs. If only the result were saved, the default view would reopen on its own
+ * placeholder text over a workflow configured as something else — a sentence
+ * nobody wrote, sitting under a "Configured" badge. So migration 026 keeps the
+ * four inputs, and their absence is meaningful: it means the figure was typed
+ * directly, and this file says so rather than inventing a baseline.
+ *
+ * ── Why an untouched row saves nothing ───────────────────────────────────
+ *
+ * The sentence has placeholder values, and they compute to a real-looking
+ * number. Writing that number on save would configure every workflow in the
+ * list from a claim nobody made — 164 confident figures out of one page load.
+ * A row goes live when somebody touches its sentence, and until then the
+ * arithmetic is shown as a preview and stored nowhere.
  */
 
 import { perExecutionSeconds } from './roi_math.mjs';
@@ -41,10 +49,30 @@ import { perExecutionSeconds } from './roi_math.mjs';
 /** Every workflow the caller may configure, with whatever is already stored. */
 let workflows = [];
 
-/** Which rows have their calculator open, so a re-render does not close them. */
-const opened = new Set();
+/**
+ * Rows whose sentence the person has edited this session.
+ *
+ * A row with a stored baseline is already live; this is what promotes one that
+ * is not, at the moment of the first keystroke. Kept out of `workflows` because
+ * it is interaction state, not data to be saved.
+ */
+const touched = new Set();
+
+const MODE_KEY = 'roi.configure.mode';
+const MODES = ['baseline', 'direct'];
+
+/**
+ * Which view is showing. A preference of the person, not of the workflow — so
+ * it is one value for the whole list, and it is remembered, because being
+ * returned to a view you did not choose on every reload is the kind of small
+ * insult that makes people stop using a page.
+ */
+let mode = 'baseline';
+
+const DEFAULTS = { frequency: 5, per: 'week', duration: 30, unit: 'minutes' };
 
 const el = (id) => document.getElementById(id);
+const esc = (s) => window.escapeHtml(String(s ?? ''));
 
 // ==========================================================================
 // Reading and writing the list
@@ -88,10 +116,28 @@ function paintCoverage() {
 }
 
 // ==========================================================================
-// Rendering
+// The baseline, and whether a row has one
 // ==========================================================================
 
-const esc = (s) => window.escapeHtml(String(s ?? ''));
+/** True when this row's sentence is the source of its figure. */
+function isLive(wf) {
+    return touched.has(wf.id) || wf.baseline_frequency !== null;
+}
+
+/** What to put in the sentence's controls — the stored claim, or the placeholder. */
+function baselineOf(wf) {
+    if (wf.baseline_frequency === null) return { ...DEFAULTS };
+    return {
+        frequency: Number(wf.baseline_frequency),
+        per: wf.baseline_per,
+        duration: Number(wf.baseline_duration),
+        unit: wf.baseline_unit
+    };
+}
+
+// ==========================================================================
+// Rendering
+// ==========================================================================
 
 function visible() {
     const term = (el('workflowSearch')?.value || '').toLowerCase().trim();
@@ -120,24 +166,10 @@ function visible() {
     return rows;
 }
 
-/**
- * One workflow.
- *
- * `first` is why the column labels are not on every row. There are 164
- * workflows on the instance this was built against, and "SAVES PER RUN /
- * HOURLY RATE" repeated 164 times is 328 lines of chrome competing with the
- * numbers they label — dashboard-design's "the data is the decoration", failed.
- * The label is drawn once, at the top of the list, and every input keeps its
- * `aria-label`, so nothing is lost to a screen reader by removing it from view.
- */
-function row(wf, first) {
+/** The name, the badge and the run counts — identical in both views. */
+function head(wf) {
     const configured = Number(wf.saved_time_seconds) > 0;
-    const execs30 = Number(wf.executions_30d) || 0;
-    const symbol = window.currencySymbol();
-
     return `
-    <div class="roi-row" data-id="${esc(wf.id)}">
-      <div class="roi-row-head">
         <div class="roi-row-id">
           <span class="roi-row-name" title="${esc(wf.name)}">${esc(wf.name)}</span>
           <span class="roi-row-meta">
@@ -146,10 +178,81 @@ function row(wf, first) {
             </span>
             <span>${(Number(wf.execution_count) || 0).toLocaleString()} runs all time</span>
             <span>·</span>
-            <span>${execs30.toLocaleString()} in the last 30 days</span>
+            <span>${(Number(wf.executions_30d) || 0).toLocaleString()} in the last 30 days</span>
           </span>
+        </div>`;
+}
+
+/**
+ * The rate control, in both views.
+ *
+ * `first` is why the column label is not on every row. There are 164 workflows
+ * on the instance this was built against, and the same caption repeated 164
+ * times is chrome competing with the numbers it labels. It is drawn once, at
+ * the top, and the `aria-label` stays on every input so nothing is lost to a
+ * screen reader.
+ */
+function rateField(wf, first) {
+    return `
+          <label class="roi-input">
+            <span class="roi-input-label" ${first ? '' : 'aria-hidden="true"'}>${first ? 'Hourly rate' : ''}</span>
+            <span class="input-affix">
+              <span class="affix">${esc(window.currencySymbol())}</span>
+              <input type="number" min="0" step="1" class="input js-rate"
+                     value="${Number(wf.hourly_rate) || 0}" aria-label="Hourly rate of the work replaced">
+              <span class="affix">/h</span>
+            </span>
+          </label>`;
+}
+
+const option = (value, label, selected) =>
+    `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`;
+
+function baselineRow(wf, first) {
+    const b = baselineOf(wf);
+    return `
+    <div class="roi-row" data-id="${esc(wf.id)}">
+      <div class="roi-row-head">
+        ${head(wf)}
+        <div class="roi-row-inputs">${rateField(wf, first)}</div>
+      </div>
+
+      <div class="roi-calc" data-execs="${Number(wf.executions_30d) || 0}">
+        <div class="roi-sentence">
+          <span>A person did this</span>
+          <span class="input-affix roi-calc-field">
+            <input type="number" min="1" step="1" value="${esc(b.frequency)}"
+                   class="input js-freq" aria-label="How many times">
+          </span>
+          <span>times per</span>
+          <span class="input-affix roi-calc-field">
+            <select class="input js-per" aria-label="Per period">
+              ${option('day', 'day', b.per)}${option('week', 'week', b.per)}${option('month', 'month', b.per)}
+            </select>
+          </span>
+          <span>, and each time took</span>
+          <span class="input-affix roi-calc-field">
+            <input type="number" min="1" step="1" value="${esc(b.duration)}"
+                   class="input js-dur" aria-label="How long">
+          </span>
+          <span class="input-affix roi-calc-field">
+            <select class="input js-unit" aria-label="Time unit">
+              ${option('minutes', 'minutes', b.unit)}${option('hours', 'hours', b.unit)}
+            </select>
+          </span>
+          <span>.</span>
         </div>
 
+        <div class="roi-working js-working"></div>
+      </div>
+    </div>`;
+}
+
+function directRow(wf, first) {
+    return `
+    <div class="roi-row" data-id="${esc(wf.id)}">
+      <div class="roi-row-head">
+        ${head(wf)}
         <div class="roi-row-inputs">
           <label class="roi-input">
             <span class="roi-input-label" ${first ? '' : 'aria-hidden="true"'}>${first ? 'Saves per run' : ''}</span>
@@ -159,55 +262,8 @@ function row(wf, first) {
               <span class="affix">sec</span>
             </span>
           </label>
-
-          <label class="roi-input">
-            <span class="roi-input-label" ${first ? '' : 'aria-hidden="true"'}>${first ? 'Hourly rate' : ''}</span>
-            <span class="input-affix">
-              <span class="affix">${esc(symbol)}</span>
-              <input type="number" min="0" step="1" class="input js-rate"
-                     value="${Number(wf.hourly_rate) || 0}" aria-label="Hourly rate of the work replaced">
-              <span class="affix">/h</span>
-            </span>
-          </label>
-
-          <button type="button" class="btn btn-sm js-calc-toggle"
-                  aria-expanded="${opened.has(wf.id) ? 'true' : 'false'}">
-            <i class="fa-solid fa-wand-magic-sparkles"></i> Work it out
-          </button>
+          ${rateField(wf, first)}
         </div>
-      </div>
-
-      <div class="roi-calc" ${opened.has(wf.id) ? '' : 'hidden'} data-execs="${execs30}">
-        <p class="roi-calc-lead">Describe the manual job this replaced.</p>
-
-        <div class="roi-sentence">
-          <span>A person did this</span>
-          <span class="input-affix roi-calc-field">
-            <input type="number" min="1" step="1" value="5" class="input js-freq" aria-label="How many times">
-          </span>
-          <span>times per</span>
-          <span class="input-affix roi-calc-field">
-            <select class="input js-per" aria-label="Per period">
-              <option value="day">day</option>
-              <option value="week" selected>week</option>
-              <option value="month">month</option>
-            </select>
-          </span>
-          <span>, and each time took</span>
-          <span class="input-affix roi-calc-field">
-            <input type="number" min="1" step="1" value="30" class="input js-dur" aria-label="How long">
-          </span>
-          <span class="input-affix roi-calc-field">
-            <select class="input js-unit" aria-label="Time unit">
-              <option value="minutes" selected>minutes</option>
-              <option value="hours">hours</option>
-            </select>
-          </span>
-          <span>.</span>
-        </div>
-
-        <!-- The working, shown before the button rather than behind it. -->
-        <div class="roi-working js-working"></div>
       </div>
     </div>`;
 }
@@ -226,12 +282,13 @@ function render() {
         return;
     }
 
-    container.innerHTML = rows.map((wf, i) => row(wf, i === 0)).join('');
-    rows.forEach((wf) => { if (opened.has(wf.id)) recalc(wf.id); });
+    const draw = mode === 'direct' ? directRow : baselineRow;
+    container.innerHTML = rows.map((wf, i) => draw(wf, i === 0)).join('');
+    if (mode === 'baseline') rows.forEach((wf) => recalc(wf.id));
 }
 
 // ==========================================================================
-// The calculator's live working
+// The live working
 // ==========================================================================
 
 const rowEl = (id) => document.querySelector(`.roi-row[data-id="${CSS.escape(id)}"]`);
@@ -247,49 +304,112 @@ function readCalc(node) {
 }
 
 /**
- * Redraws one row's working.
+ * Redraws one row's working, and — when the row is live — commits the figure.
  *
  * Every intermediate is named. If the answer looks wrong, the reader can see
- * WHICH line is wrong — which is the difference between a calculator and an
+ * WHICH line is wrong, which is the difference between a calculator and an
  * oracle, and the whole reason the old one was distrusted.
  */
-function recalc(id) {
+function recalc(id, { commit = false } = {}) {
     const node = rowEl(id);
     if (!node) return;
     const calc = node.querySelector('.roi-calc');
     const out = node.querySelector('.js-working');
     if (!calc || !out) return;
 
+    const wf = workflows.find((w) => w.id === id);
+    if (!wf) return;
+
     const result = perExecutionSeconds(readCalc(calc));
+    const live = isLive(wf);
 
     if (!result.ok) {
+        // The refusal names the other view, because on a workflow n8n has not
+        // run there is no divisor and no amount of rewording the sentence will
+        // produce one. Telling somebody to try harder at an impossible form is
+        // worse than telling them where the possible one is.
         out.innerHTML = `<div class="roi-working-blocked">
             <i class="fa-solid fa-circle-info"></i><span>${esc(result.reason)}</span>
         </div>`;
         return;
     }
 
+    if (commit && live) {
+        wf.saved_time_seconds = result.secondsPerExecution;
+        wf.baseline_frequency = Number(calc.querySelector('.js-freq').value);
+        wf.baseline_per = calc.querySelector('.js-per').value;
+        wf.baseline_duration = Number(calc.querySelector('.js-dur').value);
+        wf.baseline_unit = calc.querySelector('.js-unit').value;
+        paintBadge(node, wf);
+    }
+
     const monthly = window.formatDuration(result.humanSecondsPerMonth);
     const runs = Math.round(result.manualRunsPerMonth).toLocaleString();
     const execs = result.executions30d.toLocaleString();
-    const each = window.formatDuration(result.secondsPerExecution);
+    const each = result.secondsPerExecution >= 60
+        ? ` · ${esc(window.formatDuration(result.secondsPerExecution))}` : '';
+
+    // The stored figure is shown beside the preview only when the two are not
+    // the same thing — a row whose number was typed directly still has one, and
+    // an untouched sentence must not look like it replaced it.
+    const stored = Number(wf.saved_time_seconds) || 0;
+    const pending = !live && stored > 0
+        ? `<p class="roi-preview-note">Currently <strong>${stored.toLocaleString()} sec</strong>
+             per run, entered directly. Edit the sentence to replace it.</p>`
+        : !live
+            ? '<p class="roi-preview-note">A preview. Edit the sentence to use it.</p>'
+            : '';
 
     out.innerHTML = `
       <dl class="roi-steps">
         <div><dt>That is</dt><dd>${runs} manual runs a month — <strong>${esc(monthly)}</strong> of work</dd></div>
         <div><dt>n8n ran it</dt><dd>${execs} times in the same 30 days</dd></div>
       </dl>
-      <div class="roi-result">
+      <div class="roi-result${live ? '' : ' is-preview'}">
         <div>
           <span class="label">Saved per execution</span>
-          <span class="roi-result-value">${result.secondsPerExecution.toLocaleString()} sec<span class="roi-result-alt">${
-    result.secondsPerExecution >= 60 ? ` · ${esc(each)}` : ''
-}</span></span>
+          <span class="roi-result-value">${result.secondsPerExecution.toLocaleString()} sec<span
+            class="roi-result-alt">${each}</span></span>
         </div>
-        <button type="button" class="btn btn-primary btn-sm js-calc-apply">
-          <i class="fa-solid fa-arrow-up"></i> Use this figure
-        </button>
+        ${pending}
       </div>`;
+}
+
+/** Keeps the badge honest the moment the thing it describes changes. */
+function paintBadge(node, wf) {
+    const badge = node.querySelector('.roi-row-meta .badge');
+    if (!badge) return;
+    const configured = Number(wf.saved_time_seconds) > 0;
+    badge.className = `badge ${configured ? 'badge-good' : 'badge-neutral'}`;
+    badge.textContent = configured ? 'Configured' : 'Not set';
+}
+
+// ==========================================================================
+// The view switch
+// ==========================================================================
+
+function paintMode() {
+    document.querySelectorAll('.roi-mode-btn').forEach((btn) => {
+        const on = btn.dataset.mode === mode;
+        btn.setAttribute('aria-checked', String(on));
+        btn.classList.toggle('is-on', on);
+        // Only the selected control is in the tab order, which is what a
+        // radiogroup is supposed to do — otherwise every switch costs two tabs
+        // to get past.
+        btn.tabIndex = on ? 0 : -1;
+    });
+}
+
+function setMode(next) {
+    if (!MODES.includes(next) || next === mode) return;
+    mode = next;
+    try {
+        window.localStorage.setItem(MODE_KEY, mode);
+    } catch {
+        // A browser refusing storage is not a reason to refuse the switch.
+    }
+    paintMode();
+    render();
 }
 
 // ==========================================================================
@@ -309,20 +429,42 @@ export function attach() {
     const container = el('settingsContainer');
     if (!container) return;
 
+    try {
+        const saved = window.localStorage.getItem(MODE_KEY);
+        if (MODES.includes(saved)) mode = saved;
+    } catch {
+        // Same as above: the default is a perfectly good answer.
+    }
+    paintMode();
+
+    document.querySelectorAll('.roi-mode-btn').forEach((btn) => {
+        btn.addEventListener('click', () => setMode(btn.dataset.mode));
+    });
+
     container.addEventListener('input', (event) => {
         const node = event.target.closest('.roi-row');
         if (!node) return;
         const wf = workflows.find((w) => w.id === node.dataset.id);
+        if (!wf) return;
 
         if (event.target.classList.contains('js-seconds')) {
-            if (wf) wf.saved_time_seconds = Math.max(0, parseInt(event.target.value, 10) || 0);
+            wf.saved_time_seconds = Math.max(0, parseInt(event.target.value, 10) || 0);
+            // Typing the figure directly retires whatever sentence used to
+            // produce it. Keeping both would leave the other view redisplaying a
+            // claim that no longer computes to the saved number — the one thing
+            // storing the baseline was meant to prevent.
+            clearBaseline(wf);
+            paintBadge(node, wf);
             markDirty();
             paintCoverage();
         } else if (event.target.classList.contains('js-rate')) {
-            if (wf) wf.hourly_rate = Math.max(0, parseFloat(event.target.value) || 0);
+            wf.hourly_rate = Math.max(0, parseFloat(event.target.value) || 0);
             markDirty();
         } else if (event.target.closest('.roi-calc')) {
-            recalc(node.dataset.id);
+            touched.add(wf.id);
+            recalc(wf.id, { commit: true });
+            markDirty();
+            paintCoverage();
         }
     });
 
@@ -331,27 +473,11 @@ export function attach() {
     // switch week to month is the calculator nobody believes.
     container.addEventListener('change', (event) => {
         const node = event.target.closest('.roi-row');
-        if (node && event.target.closest('.roi-calc')) recalc(node.dataset.id);
-    });
-
-    container.addEventListener('click', (event) => {
-        const node = event.target.closest('.roi-row');
-        if (!node) return;
-        const id = node.dataset.id;
-
-        const toggle = event.target.closest('.js-calc-toggle');
-        if (toggle) {
-            const calc = node.querySelector('.roi-calc');
-            const open = calc.hidden;
-            calc.hidden = !open;
-            toggle.setAttribute('aria-expanded', String(open));
-            if (open) { opened.add(id); recalc(id); } else { opened.delete(id); }
-            return;
-        }
-
-        if (event.target.closest('.js-calc-apply')) {
-            apply(id);
-        }
+        if (!node || !event.target.closest('.roi-calc')) return;
+        touched.add(node.dataset.id);
+        recalc(node.dataset.id, { commit: true });
+        markDirty();
+        paintCoverage();
     });
 
     ['workflowSearch', 'workflowFilter', 'workflowSort'].forEach((control) => {
@@ -361,41 +487,12 @@ export function attach() {
     el('saveBtn')?.addEventListener('click', save);
 }
 
-/**
- * Moves the calculated figure into the field that will actually be saved.
- *
- * The flash is not decoration. The value lands in a control the reader was not
- * looking at — their eyes are on the result panel — so something has to say
- * where it went, and an animation on the destination is the shortest way to
- * point at it.
- */
-function apply(id) {
-    const node = rowEl(id);
-    const calc = node?.querySelector('.roi-calc');
-    if (!calc) return;
-
-    const result = perExecutionSeconds(readCalc(calc));
-    if (!result.ok) return;
-
-    const input = node.querySelector('.js-seconds');
-    input.value = result.secondsPerExecution;
-
-    const wf = workflows.find((w) => w.id === id);
-    if (wf) wf.saved_time_seconds = result.secondsPerExecution;
-
-    input.classList.add('is-applied');
-    setTimeout(() => input.classList.remove('is-applied'), 900);
-
-    // The badge on the row says "Not set" until this happens, and leaving it
-    // stale after the thing it describes has changed is a small lie the reader
-    // has no reason to doubt.
-    const badge = node.querySelector('.roi-row-meta .badge');
-    if (badge && result.secondsPerExecution > 0) {
-        badge.className = 'badge badge-good';
-        badge.textContent = 'Configured';
-    }
-    markDirty();
-    paintCoverage();
+function clearBaseline(wf) {
+    touched.delete(wf.id);
+    wf.baseline_frequency = null;
+    wf.baseline_per = null;
+    wf.baseline_duration = null;
+    wf.baseline_unit = null;
 }
 
 // ==========================================================================
@@ -433,7 +530,14 @@ async function save() {
                 settings: workflows.map((w) => ({
                     workflow_id: w.id,
                     saved_time_seconds: parseInt(w.saved_time_seconds, 10) || 0,
-                    hourly_rate: parseFloat(w.hourly_rate) || 0
+                    hourly_rate: parseFloat(w.hourly_rate) || 0,
+                    // All four or none — the server rejects three, because a
+                    // sentence with a hole in it can be neither recomputed nor
+                    // redisplayed.
+                    baseline_frequency: w.baseline_frequency,
+                    baseline_per: w.baseline_per,
+                    baseline_duration: w.baseline_duration,
+                    baseline_unit: w.baseline_unit
                 }))
             })
         });

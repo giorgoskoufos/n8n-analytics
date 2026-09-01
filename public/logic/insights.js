@@ -264,9 +264,7 @@ async function loadTriggers() {
                     ? `<span class="text-red-400/90">${ratio.toFixed(1)}× the overall rate</span>`
                     : `<span class="text-green-400/90">${(1 / ratio).toFixed(1)}× better than average</span>`;
             return `
-            <div class="card kpi relative overflow-hidden">
-                <span class="absolute left-0 top-0 bottom-0 w-1"
-                      style="background:${modeColor(m.mode)}"></span>
+            <div class="card kpi">
                 <p class="text-[10px] uppercase font-bold tracking-widest text-ink-3 mb-2">
                     ${escapeHtml(modeLabel(m.mode))}</p>
                 <div class="flex items-baseline gap-2 mb-3">

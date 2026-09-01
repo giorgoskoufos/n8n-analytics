@@ -69,4 +69,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // 3. Interactive Dotted Canvas & Logo Glow Logic
+    const authCard = document.getElementById('authCard');
+    const logoBadge = document.getElementById('logoBadge');
+    const logoGlow = document.getElementById('logoGlow');
+
+    window.addEventListener('mousemove', (e) => {
+        // 1. Update global cursor position for orange dotted hover spotlight
+        document.documentElement.style.setProperty('--mouse-screen-x', `${e.clientX}px`);
+        document.documentElement.style.setProperty('--mouse-screen-y', `${e.clientY}px`);
+
+        // 2. Soft Logo Glow Proximity (50% subtle intensity)
+        if (logoBadge && logoGlow) {
+            const logoRect = logoBadge.getBoundingClientRect();
+            const logoCenterX = logoRect.left + logoRect.width / 2;
+            const logoCenterY = logoRect.top + logoRect.height / 2;
+            const distToLogo = Math.hypot(e.clientX - logoCenterX, e.clientY - logoCenterY);
+
+            const logoProximity = Math.max(0, 1 - distToLogo / 240);
+            logoGlow.style.opacity = (0.25 + logoProximity * 0.25).toFixed(2);
+            logoGlow.style.transform = `scale(${1 + logoProximity * 0.08})`;
+        }
+    }, { passive: true });
 });

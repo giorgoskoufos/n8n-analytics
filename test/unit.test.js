@@ -113,6 +113,68 @@ test('validateRoiEntry bounds the numbers', () => {
     assert.equal(validateRoiEntry({ saved_time_seconds: 60, hourly_rate: 50 }).ok, false, 'workflow_id is required');
 });
 
+test('the ROI baseline is all four fields or none of them', () => {
+    const base = { workflow_id: 'w1', saved_time_seconds: 60, hourly_rate: 50 };
+    const full = {
+        ...base,
+        baseline_frequency: 5, baseline_per: 'week',
+        baseline_duration: 30, baseline_unit: 'minutes'
+    };
+
+    const complete = validateRoiEntry(full);
+    assert.equal(complete.ok, true);
+    assert.deepEqual(
+        {
+            f: complete.value.baseline_frequency, p: complete.value.baseline_per,
+            d: complete.value.baseline_duration, u: complete.value.baseline_unit
+        },
+        { f: 5, p: 'week', d: 30, u: 'minutes' }
+    );
+
+    // The common case, and NOT an error: the figure was typed directly in
+    // Per-run figures. The nulls are load-bearing — they are what clears a
+    // stale baseline off a row that used to have one.
+    const none = validateRoiEntry(base);
+    assert.equal(none.ok, true);
+    assert.equal(none.value.baseline_frequency, null);
+    assert.equal(none.value.baseline_per, null);
+    assert.equal(none.value.baseline_duration, null);
+    assert.equal(none.value.baseline_unit, null);
+
+    // Three of four is a sentence with a hole in it: it can be neither
+    // recomputed nor redisplayed, so it is refused rather than half-stored.
+    for (const missing of
+        ['baseline_frequency', 'baseline_per', 'baseline_duration', 'baseline_unit']) {
+        const partial = { ...full };
+        delete partial[missing];
+        assert.equal(validateRoiEntry(partial).ok, false, `${missing} missing must be refused`);
+    }
+});
+
+test('the ROI baseline only accepts periods and units the calculator knows', () => {
+    const base = {
+        workflow_id: 'w1', saved_time_seconds: 60, hourly_rate: 50,
+        baseline_frequency: 5, baseline_per: 'week',
+        baseline_duration: 30, baseline_unit: 'minutes'
+    };
+
+    // A period stored here that roi_math.mjs cannot divide is a row whose
+    // figure can never be recomputed — so the two lists have to agree, and
+    // this is the assertion that notices when they stop agreeing.
+    assert.equal(validateRoiEntry({ ...base, baseline_per: 'fortnight' }).ok, false);
+    assert.equal(validateRoiEntry({ ...base, baseline_unit: 'seconds' }).ok, false);
+    assert.equal(validateRoiEntry({ ...base, baseline_frequency: 0 }).ok, false);
+    assert.equal(validateRoiEntry({ ...base, baseline_duration: -5 }).ok, false);
+    assert.equal(validateRoiEntry({ ...base, baseline_frequency: 10001 }).ok, false);
+
+    for (const per of ['day', 'week', 'month']) {
+        assert.equal(validateRoiEntry({ ...base, baseline_per: per }).ok, true, per);
+    }
+    for (const unit of ['minutes', 'hours']) {
+        assert.equal(validateRoiEntry({ ...base, baseline_unit: unit }).ok, true, unit);
+    }
+});
+
 // ---------------------------------------------------------------------- logger
 test('the logger never prints a secret', () => {
     // Both of these had already leaked through another channel and had to be
@@ -2391,6 +2453,47 @@ test('a workflow that has not run is refused, not divided by one', async () => {
     });
     assert.equal(tiny.ok, true);
     assert.equal(tiny.secondsPerExecution, 1);
+});
+
+test('what the server will store, the browser can still divide', async () => {
+    // Two lists, in two languages, that have to mean the same thing: the
+    // periods and units validate.js is willing to persist, and the ones
+    // roi_math.mjs knows how to turn into a figure.
+    //
+    // Drift here is not a crash. A period accepted by the server and unknown to
+    // the calculator produces a stored baseline that reopens as "Pick a period
+    // and a unit" forever, on a row already wearing a Configured badge — and
+    // the two files are far enough apart that nobody would connect them.
+    const { PER_MONTH, UNIT_SECONDS } = await import(
+        `file://${path.join(ROOT, 'public/logic/roi/roi_math.mjs').replace(/\\/g, '/')}`
+    );
+
+    const entry = (over) => validateRoiEntry({
+        workflow_id: 'w1', saved_time_seconds: 60, hourly_rate: 50,
+        baseline_frequency: 5, baseline_per: 'week',
+        baseline_duration: 30, baseline_unit: 'minutes',
+        ...over
+    });
+
+    // Everything the calculator understands must survive validation…
+    for (const per of Object.keys(PER_MONTH)) {
+        assert.equal(entry({ baseline_per: per }).ok, true,
+            `roi_math knows "${per}" but validate.js refuses it`);
+    }
+    for (const unit of Object.keys(UNIT_SECONDS)) {
+        assert.equal(entry({ baseline_unit: unit }).ok, true,
+            `roi_math knows "${unit}" but validate.js refuses it`);
+    }
+
+    // …and nothing else may be stored, or it comes back undividable.
+    for (const per of ['fortnight', 'year', 'hour', '']) {
+        assert.equal(entry({ baseline_per: per }).ok, false,
+            `validate.js accepts "${per}" but roi_math cannot divide it`);
+    }
+    for (const unit of ['seconds', 'days', '']) {
+        assert.equal(entry({ baseline_unit: unit }).ok, false,
+            `validate.js accepts "${unit}" but roi_math cannot divide it`);
+    }
 });
 
 // =========================================== the assistant's own configuration

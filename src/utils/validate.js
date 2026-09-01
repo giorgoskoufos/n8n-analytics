@@ -235,6 +235,86 @@ function validateSetting(key, value) {
 const MAX_SAVED_SECONDS = 24 * 3600;
 const MAX_HOURLY_RATE = 100000;
 
+// The Business case view's own four inputs, stored so that view can redisplay
+// what somebody actually claimed instead of reopening on its defaults. Kept in
+// step with PER_MONTH / UNIT_SECONDS in public/logic/roi/roi_math.mjs — the
+// browser computes the figure, this decides what may be persisted, and a period
+// accepted here that the calculator does not know is a row it can never
+// recompute.
+const BASELINE_PERIODS = new Set(['day', 'week', 'month']);
+const BASELINE_UNITS = new Set(['minutes', 'hours']);
+const MAX_BASELINE_FREQUENCY = 10000;
+const MAX_BASELINE_DURATION = 10000;
+
+/**
+ * The baseline is all four fields or none of them.
+ *
+ * Three of four is not a partially-filled form to be tolerated — it is a
+ * sentence with a hole in it, and it cannot be recomputed or redisplayed. The
+ * absent case is the common one and is not an error: it means the figure was
+ * typed directly in Per-run figures, and the nulls are what clear a stale
+ * baseline off a row that used to have one.
+ */
+function validateRoiBaseline(entry, workflowId) {
+    const parts = [entry.baseline_frequency, entry.baseline_per,
+        entry.baseline_duration, entry.baseline_unit];
+    const given = parts.filter((v) => v !== undefined && v !== null && v !== '');
+
+    if (given.length === 0) {
+        return {
+            ok: true,
+            value: {
+                baseline_frequency: null, baseline_per: null,
+                baseline_duration: null, baseline_unit: null
+            }
+        };
+    }
+    if (given.length !== 4) {
+        return {
+            ok: false,
+            error: `The baseline for ${workflowId} is incomplete. Send all four of ` +
+                'baseline_frequency, baseline_per, baseline_duration and baseline_unit, or none.'
+        };
+    }
+
+    const frequency = Number(entry.baseline_frequency);
+    if (!Number.isFinite(frequency) || frequency <= 0 || frequency > MAX_BASELINE_FREQUENCY) {
+        return {
+            ok: false,
+            error: `baseline_frequency for ${workflowId} must be between 0 and ${MAX_BASELINE_FREQUENCY}.`
+        };
+    }
+    const duration = Number(entry.baseline_duration);
+    if (!Number.isFinite(duration) || duration <= 0 || duration > MAX_BASELINE_DURATION) {
+        return {
+            ok: false,
+            error: `baseline_duration for ${workflowId} must be between 0 and ${MAX_BASELINE_DURATION}.`
+        };
+    }
+    if (!BASELINE_PERIODS.has(entry.baseline_per)) {
+        return {
+            ok: false,
+            error: `baseline_per for ${workflowId} must be one of: ${[...BASELINE_PERIODS].join(', ')}.`
+        };
+    }
+    if (!BASELINE_UNITS.has(entry.baseline_unit)) {
+        return {
+            ok: false,
+            error: `baseline_unit for ${workflowId} must be one of: ${[...BASELINE_UNITS].join(', ')}.`
+        };
+    }
+
+    return {
+        ok: true,
+        value: {
+            baseline_frequency: frequency,
+            baseline_per: entry.baseline_per,
+            baseline_duration: duration,
+            baseline_unit: entry.baseline_unit
+        }
+    };
+}
+
 function validateRoiEntry(entry) {
     if (!entry || typeof entry !== 'object') {
         return { ok: false, error: 'Each ROI setting must be an object.' };
@@ -260,7 +340,18 @@ function validateRoiEntry(entry) {
         };
     }
 
-    return { ok: true, value: { workflow_id: entry.workflow_id, saved_time_seconds: seconds, hourly_rate: rate } };
+    const baseline = validateRoiBaseline(entry, entry.workflow_id);
+    if (!baseline.ok) return baseline;
+
+    return {
+        ok: true,
+        value: {
+            workflow_id: entry.workflow_id,
+            saved_time_seconds: seconds,
+            hourly_rate: rate,
+            ...baseline.value
+        }
+    };
 }
 
 module.exports = {

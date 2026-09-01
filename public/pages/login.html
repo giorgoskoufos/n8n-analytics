@@ -24,46 +24,99 @@
 -->
 
 <body class="min-h-[100dvh] flex items-center justify-center p-4 relative overflow-hidden" style="background-color: var(--surface-0)">
-    <!-- Blurred workflow background -->
-    <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none" aria-hidden="true">
-        <div class="absolute -inset-4 bg-cover bg-center bg-no-repeat"
-            style="background-image: url('../assets/n8n_login_bg.png'); filter: blur(3px) brightness(0.4) saturate(1.05);">
+    <!-- 1. Dotted Workflow Canvas Grid (z: -10) -->
+    <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none" aria-hidden="true" style="background-color: #171717;">
+        <!-- Base subtle white/grey dots -->
+        <div class="absolute inset-0"
+            style="background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1.5px, transparent 1.5px); background-size: 28px 28px; background-position: -5px -5px;">
         </div>
-        <div class="absolute inset-0 bg-black/30"></div>
+
+        <!-- Orange glowing dots revealed near the cursor -->
+        <div id="orangeDotsLayer" class="absolute inset-0"
+            style="background-image: radial-gradient(rgba(255, 111, 92, 0.95) 1.5px, transparent 1.5px); background-size: 28px 28px; background-position: -5px -5px; -webkit-mask-image: radial-gradient(280px circle at var(--mouse-screen-x, -500px) var(--mouse-screen-y, -500px), black 0%, transparent 100%); mask-image: radial-gradient(280px circle at var(--mouse-screen-x, -500px) var(--mouse-screen-y, -500px), black 0%, transparent 100%);">
+        </div>
+
+        <!-- Dark vignette overlay for depth -->
+        <div class="absolute inset-0" style="background: radial-gradient(circle at 50% 50%, transparent 15%, rgba(17, 17, 17, 0.75) 85%);"></div>
     </div>
 
-    <div class="bg-n8n-card/90 backdrop-blur-xl border border-line rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-8 relative z-10">
-        <div class="text-center mb-8">
-            <div
-                class="bg-n8n-primary/20 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-n8n-primary/30 shadow-lg shadow-n8n-primary/5">
-                <img src="../assets/n8n_db.png" alt="n8n Dashboard Logo" class="w-12 h-12 object-contain">
+    <!-- 2. Main Auth Card Container (z: 10) -->
+    <div class="w-full max-w-md relative z-10">
+        <div id="authCard" class="bg-surface-1/95 backdrop-blur-sm border border-white/10 rounded-2xl p-7 sm:p-9 transition-all duration-300 relative overflow-hidden"
+            style="box-shadow: 0 24px 60px -12px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.1)">
+
+            <!-- Header / Brand -->
+            <div class="text-center mb-8 relative z-10">
+                <div class="relative inline-flex mb-4 group/logo">
+                    <div id="logoGlow" class="absolute -inset-1 bg-gradient-to-r from-n8n-primary/25 to-n8n-primary/10 rounded-2xl blur-sm transition-all duration-300 opacity-30"></div>
+                    <div id="logoBadge" class="relative bg-gradient-to-b from-surface-2 to-surface-1 w-16 h-16 rounded-2xl flex items-center justify-center border border-white/10 shadow-lg shadow-black/40 transition-transform duration-300">
+                        <img src="../assets/n8n_db.png" alt="n8n Dashboard Logo" class="w-12 h-12 object-contain filter drop-shadow">
+                    </div>
+                </div>
+                <h1 class="text-2xl font-bold text-white tracking-tight mb-1.5 flex items-center justify-center gap-2">
+                    <span>n8n Analytics</span>
+                    <span class="text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-full bg-n8n-primary/15 text-n8n-primary border border-n8n-primary/30">v2.0</span>
+                </h1>
+                <p class="text-ink-3 text-xs sm:text-sm font-normal">Real-time workflow intelligence & monitoring</p>
             </div>
-            <h2 class="text-2xl font-bold text-white mb-2">n8n Analytics</h2>
-            <p class="text-ink-2 text-sm">Login with your n8n credentials</p>
+
+            <!-- Login Form -->
+            <form id="loginForm" class="space-y-4 sm:space-y-5">
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2" for="email">
+                        Email Address
+                    </label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-ink-3">
+                            <i class="fa-regular fa-envelope text-sm"></i>
+                        </span>
+                        <input type="email" id="email" required autocomplete="email"
+                            class="w-full bg-black/40 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-ink-3 focus:outline-none focus:border-n8n-primary focus:ring-2 focus:ring-n8n-primary/25 transition-all duration-150"
+                            placeholder="name@company.com">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-ink-3 mb-2" for="password">
+                        Password
+                    </label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 pointer-events-none text-ink-3">
+                            <i class="fa-solid fa-lock text-sm"></i>
+                        </span>
+                        <input type="password" id="password" required autocomplete="current-password"
+                            class="w-full bg-black/40 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-ink-3 focus:outline-none focus:border-n8n-primary focus:ring-2 focus:ring-n8n-primary/25 transition-all duration-150"
+                            placeholder="••••••••">
+                    </div>
+                </div>
+
+                <!-- Error Notice -->
+                <div id="loginError"
+                    class="hidden bg-red-950/40 border border-red-500/30 text-red-300 text-xs sm:text-sm rounded-xl p-3 text-center transition-all duration-200">
+                </div>
+
+                <!-- Submit Button -->
+                <button type="submit" id="loginBtn"
+                    class="w-full bg-n8n-primary hover:bg-[#ff5740] active:scale-[0.99] text-white font-semibold py-3 px-4 rounded-xl shadow-lg shadow-n8n-primary/20 hover:shadow-n8n-primary/30 transition-all duration-200 flex justify-center items-center gap-2 cursor-pointer mt-2 text-sm sm:text-base">
+                    <span>Login</span>
+                    <i class="fa-solid fa-arrow-right text-sm"></i>
+                </button>
+            </form>
+
+            <!-- Bottom Metadata -->
+            <div class="mt-6 pt-5 border-t border-white/5 flex items-center justify-between text-[11px] text-ink-3">
+                <span class="flex items-center gap-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-good-mark animate-pulse"></span>
+                    <span>Self-Hosted Instance</span>
+                </span>
+                <span class="flex items-center gap-1">
+                    <i class="fa-solid fa-shield-halved text-[10px] text-n8n-primary"></i>
+                    <span>Secure Session</span>
+                </span>
+            </div>
         </div>
-        <form id="loginForm">
-            <div class="mb-4">
-                <label class="block text-ink-2 text-sm font-medium mb-2" for="email">Email</label>
-                <input type="email" id="email" required
-                    class="w-full bg-black/50 border border-line-2 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors"
-                    placeholder="name@company.com">
-            </div>
-            <div class="mb-6">
-                <label class="block text-ink-2 text-sm font-medium mb-2" for="password">Password</label>
-                <input type="password" id="password" required
-                    class="w-full bg-black/50 border border-line-2 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-n8n-primary transition-colors"
-                    placeholder="••••••••">
-            </div>
-            <div id="loginError"
-                class="hidden bg-red-900/30 border border-red-900/50 text-red-400 text-sm rounded-lg p-3 mb-6 text-center">
-            </div>
-            <button type="submit" id="loginBtn"
-                class="w-full bg-n8n-primary hover:bg-opacity-90 text-white font-bold py-3 px-4 rounded-lg transition-all flex justify-center items-center gap-2">
-                <span>Login</span>
-                <i class="fa-solid fa-arrow-right text-sm"></i>
-            </button>
-        </form>
     </div>
+
     <script src="../logic/login.js"></script>
 </body>
 

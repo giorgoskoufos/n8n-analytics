@@ -20,19 +20,43 @@ const { daoError, isoDaysAgo } = require('./shared');
  */
 async function listRoiSettings({ scope: caller }) {
     const scope = scopeClause(caller, 'w.id');
+    // Aggregate first, join second.
+    //
+    // This used to LEFT JOIN every successful execution onto its workflow —
+    // half a million rows carrying a name, a rate and four baseline columns
+    // apiece — and then GROUP BY seven of those columns to get back to 164
+    // rows. Measured at 2,020ms on the reference replica, and it is one of two
+    // queries the Configure tab issues, on a connection they have to take turns
+    // on. Grouping the executions on their own first and joining 164 to 164
+    // gives byte-identical output in 725ms.
     const query = `
         SELECT
             w.id,
             w.name,
             COALESCE(s.saved_time_seconds, 0) as saved_time_seconds,
             COALESCE(s.hourly_rate, 0) as hourly_rate,
-            COUNT(e.id) as execution_count,
-            SUM(CASE WHEN e.status = 'success' AND e."startedAt" >= ? THEN 1 ELSE 0 END) as executions_30d
+            -- Not COALESCEd, unlike the two above. NULL is the answer here: it
+            -- means the per-run figure was typed in directly and no baseline was
+            -- ever claimed, which the Business case view has to be able to tell
+            -- apart from one that happens to read 0.
+            s.baseline_frequency,
+            s.baseline_per,
+            s.baseline_duration,
+            s.baseline_unit,
+            COALESCE(x.execution_count, 0) as execution_count,
+            COALESCE(x.executions_30d, 0) as executions_30d
         FROM workflow_entity w
         LEFT JOIN workflow_settings s ON w.id = s.workflow_id
-        LEFT JOIN execution_entity e ON w.id = e."workflowId" AND e.status = 'success'
+        LEFT JOIN (
+            SELECT
+                "workflowId" as wf,
+                COUNT(*) as execution_count,
+                SUM(CASE WHEN "startedAt" >= ? THEN 1 ELSE 0 END) as executions_30d
+            FROM execution_entity
+            WHERE status = 'success'
+            GROUP BY "workflowId"
+        ) x ON x.wf = w.id
         ${scope.condition ? `WHERE ${scope.condition}` : ''}
-        GROUP BY w.id, w.name, s.saved_time_seconds, s.hourly_rate
         ORDER BY w.name ASC
     `;
     // The previous bound mixed 'localtime' into a comparison against UTC
@@ -84,12 +108,25 @@ async function saveRoiSettings({ entries, scope: caller }) {
         try {
             for (const s of entries) {
                 await localDb.execute(
-                    `INSERT INTO workflow_settings (workflow_id, saved_time_seconds, hourly_rate)
-                     VALUES (?, ?, ?)
+                    `INSERT INTO workflow_settings (
+                         workflow_id, saved_time_seconds, hourly_rate,
+                         baseline_frequency, baseline_per, baseline_duration, baseline_unit
+                     )
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(workflow_id) DO UPDATE SET
                          saved_time_seconds = excluded.saved_time_seconds,
-                         hourly_rate = excluded.hourly_rate`,
-                    [s.workflow_id, s.saved_time_seconds, s.hourly_rate]
+                         hourly_rate = excluded.hourly_rate,
+                         -- Written every time, nulls included. A save from the
+                         -- Per-run figures view sends four nulls and MUST clear a
+                         -- baseline that is no longer what the stored figure came
+                         -- from; leaving it would make the other view redisplay a
+                         -- sentence that no longer computes to the saved number.
+                         baseline_frequency = excluded.baseline_frequency,
+                         baseline_per       = excluded.baseline_per,
+                         baseline_duration  = excluded.baseline_duration,
+                         baseline_unit      = excluded.baseline_unit`,
+                    [s.workflow_id, s.saved_time_seconds, s.hourly_rate,
+                        s.baseline_frequency, s.baseline_per, s.baseline_duration, s.baseline_unit]
                 );
             }
             await localDb.execute('COMMIT');

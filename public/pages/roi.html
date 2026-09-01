@@ -138,13 +138,25 @@
                        contributes nothing, rather than being estimated.</p>
                 </div>
 
-                <div class="note note-brand mb-5">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
-                    <p>
-                        Don't guess at "seconds saved per run" — nobody knows that number.
-                        Open <strong>Work it out</strong> on any row and describe the manual job it replaced
-                        instead. The calculator divides that by how often n8n actually ran it, which is
-                        the part that makes the figure track reality rather than an estimate made once.
+                <!-- One choice for the whole list, not one per row: which of the
+                     two is easier is a fact about the reader, not about the
+                     workflow. The choice is remembered between visits. -->
+                <div class="roi-mode-bar mb-5">
+                    <div class="roi-mode" role="radiogroup" aria-label="How to enter the figures">
+                        <button type="button" class="roi-mode-btn is-on" role="radio"
+                                aria-checked="true" data-mode="baseline">
+                            <i class="fa-solid fa-briefcase"></i> Business case
+                        </button>
+                        <button type="button" class="roi-mode-btn" role="radio"
+                                aria-checked="false" tabindex="-1" data-mode="direct">
+                            <i class="fa-solid fa-sliders"></i> Per-run figures
+                        </button>
+                    </div>
+                    <p class="roi-mode-note">
+                        <strong>Business case</strong> asks what the manual job was and divides it by how
+                        often n8n actually ran — which is what keeps the figure tracking reality instead of
+                        an estimate made once. <strong>Per-run figures</strong> is for when you already know
+                        the number.
                     </p>
                 </div>
 
