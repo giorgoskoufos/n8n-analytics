@@ -9,8 +9,8 @@ The schema is an ordered list of migrations recorded in
 `schema_migrations`, each in its own transaction, idempotent, so an existing
 replica upgrades in place and a failed migration stops the process rather
 than leaving the schema in a state nobody described. See
-[../architecture](../architecture) for how migrations fit into the boot
-sequence, and [../operations](../operations) for backup/restore and
+[../architecture](../architecture/README.md) for how migrations fit into the boot
+sequence, and [../operations](../operations/README.md) for backup/restore and
 retention.
 
 ---
@@ -63,7 +63,7 @@ execution's payload.
 
 | Column | Since | Notes |
 |---|---|---|
-| `node_name`, `node_type`, `error_type`, `error_message`, `error_stack`, `source_node`, `source_output_index`, `input_data`, `metadata`, `execution_source` | 001 | See [../security](../security) for why three of these never leave this table |
+| `node_name`, `node_type`, `error_type`, `error_message`, `error_stack`, `source_node`, `source_output_index`, `input_data`, `metadata`, `execution_source` | 001 | See [../security](../security/README.md) for why three of these never leave this table |
 | `error_category` | 001 | `rate_limit`, `auth`, `network`, `config`, `data`, `logic`, `upstream`, `unknown` |
 | `http_code` | 002 | Read from n8n's own error object — more reliable than regexing "429" out of free text; NULL on historical rows |
 | `fingerprint` | 011 | Links to `error_fingerprints` — the mechanism that collapsed 14,271 raw errors into 98 real units of work |
@@ -92,7 +92,7 @@ still reports when it last ran. `PRIMARY KEY (workflow_id, name)` where
 `project`, `project_relation`, `shared_workflow` — mirrored, not queried live,
 because every scoped read joins against it and a Postgres round-trip per
 request would put n8n's own database on the critical path of every page
-load. See [../security](../security#who-sees-what) for why this is
+load. See [../security](../security/README.md#who-sees-what) for why this is
 re-synced wholesale every cycle rather than incrementally.
 
 Deliberately **no foreign keys** back to `workflow_entity`: membership is
@@ -112,10 +112,10 @@ Nothing in this section exists in n8n. Grouped by what they're for.
 |---|---|---|
 | `users` | 001 | Local mirror of dashboard-authenticated users (`id`, `email`) — upserted on login, the row every `user_id` foreign key below points at |
 | `dashboard_settings` | 001 | Non-secret key/value settings, served wholesale to any authenticated page |
-| `dashboard_secrets` | 024 | Secrets, split into their own table on purpose — see [../security](../security#secrets) |
+| `dashboard_secrets` | 024 | Secrets, split into their own table on purpose — see [../security](../security/README.md#secrets) |
 | `workflow_settings` | 001, 002, 026 | Per-workflow ROI inputs: `saved_time_seconds` and `hourly_rate`, plus the four `baseline_*` columns holding the manual job that figure was derived from. The division is one-way, so storing only its result would leave the Business case view unable to redisplay what anybody actually claimed. All four NULL means the figure was typed directly |
 
-**The AI assistant** — see [../ai](../ai) for how these are used
+**The AI assistant** — see [../ai](../ai/README.md) for how these are used
 
 | Table | Migration | Purpose |
 |---|---|---|
@@ -124,7 +124,7 @@ Nothing in this section exists in n8n. Grouped by what they're for.
 | `dashboard_user_memories` | 022 | Small, user-visible, user-deletable notes, written only through an explicit tool call — a unique index on `(user_id, lower(content))` dedupes near-repeats |
 | `integration_credentials` | 021 | OAuth tokens for external services (currently: the n8n docs lookup). `user_id` nullable = "this deployment" owns the credential |
 
-**Alerting** — see [../operations](../operations#alerting)
+**Alerting** — see [../operations](../operations/README.md#alerting)
 
 | Table | Migration | Purpose |
 |---|---|---|
@@ -138,7 +138,7 @@ Nothing in this section exists in n8n. Grouped by what they're for.
 | Table | Migration | Purpose |
 |---|---|---|
 | `sync_runs` | 007 | One row per ETL pass — duration, rows read, errors extracted, replica size. The direct answer to "when did this last succeed" |
-| `instance_lock` | *(owns its own schema — not in `schema.js`)* | The single-writer election; see [../architecture](../architecture#single-writer-election) |
+| `instance_lock` | *(owns its own schema — not in `schema.js`)* | The single-writer election; see [../architecture](../architecture/README.md#single-writer-election) |
 | `rate_limits` | 006 | Rate-limit counters, stored in the replica so a restart or a second instance never hands out a fresh allowance |
 | `error_fingerprints` | 011 | One row per normalized error group. Deliberately holds **no counts** — those are derived at read time from `execution_error_analytics`, so there is never a second, driftable source of truth |
 
@@ -177,7 +177,7 @@ model-generated query, `run_sql` included.
 `users` (password hashes), `credentials_entity` (though the base table never
 stored credential material anyway), `dashboard_chat_history` (other users'
 conversations), `execution_metadata.value`. See
-[../security](../security#the-ai-assistants-sandbox-briefly) for the
+[../security](../security/README.md#the-ai-assistants-sandbox-briefly) for the
 enforcement layering around this list.
 
 Scoping is enforced *inside* every workflow-derived view via a temp table
@@ -222,7 +222,7 @@ sqlite3 dashboard.sqlite "PRAGMA integrity_check;"          # structural validit
 sqlite3 dashboard.sqlite "SELECT COUNT(*) FROM execution_entity;"
 ```
 
-See [../deployment](../deployment#backup-restore-and-verification) for
+See [../deployment](../deployment/README.md#backup-restore-and-verification) for
 backing up, restoring into a fresh volume, and verifying a copy is both
 structurally sound *and* complete — `integrity_check` alone proves the
 first, not the second.

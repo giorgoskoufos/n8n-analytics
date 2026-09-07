@@ -65,7 +65,7 @@ be six copies of the same sidebar markup, independently drifting.
 **The `data-action` dispatcher deserves its own mention.** Every click handler
 in this codebase is `data-action="doThing"` plus a registered function,
 never an inline `onclick=`. That's not a style preference — it's what makes
-the CSP's `script-src-attr 'none'` (see [../security](../security)) possible
+the CSP's `script-src-attr 'none'` (see [../security](../security/README.md)) possible
 at all. Adding a new interactive element means adding to this registry, not
 writing `onclick=`.
 
@@ -146,7 +146,7 @@ npm run watch:css     # rebuilds on change, for local development
 `public/vendor/` holds committed copies of Chart.js, `marked`, DOMPurify,
 Font Awesome, Open Sans, and a custom-built `highlight.js`. This isn't an
 oversight waiting for a CDN link — it's the enforcement mechanism behind the
-CSP's `script-src 'self'` (see [../security](../security#frontend-hardening)):
+CSP's `script-src 'self'` (see [../security](../security/README.md#frontend-hardening)):
 Chart.js and `marked` used to load from jsDelivr with no pinned version,
 which meant a third party could change the code running in a page holding an
 auth token, and a breaking upstream release could take the dashboard down

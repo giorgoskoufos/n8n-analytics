@@ -119,7 +119,7 @@ from your next chat message without a restart.
 ## Alert channels
 
 Alerts are configured entirely on the **Alerts** page: rules describe *when*
-to fire (see [../operations](../operations#alerting) for the full seven rule
+to fire (see [../operations](../operations/README.md#alerting) for the full seven rule
 types), channels describe *where* the alert goes. This section is about the
 channels.
 

@@ -5,9 +5,9 @@ it. Built from `server.js` and `src/routes/*.js` directly.*
 
 All routes are mounted under `/api` except the two bare health probes. For
 the middleware chain each router applies and *why* it's ordered the way it
-is, see [../architecture](../architecture#request-lifecycle). For what
+is, see [../architecture](../architecture/README.md#request-lifecycle). For what
 "scoped" means in the Auth column below, see
-[../security](../security#who-sees-what).
+[../security](../security/README.md#who-sees-what).
 
 **Auth levels used throughout this page:**
 
@@ -65,7 +65,7 @@ naming nothing 400s via `verifyGrouping` before the handler runs.
 | `GET /api/n8n-health` | Proxy-check n8n's own `/healthz` | Authenticated | 3.5s timeout |
 | `GET /api/settings/roi` | Read per-workflow ROI inputs | Authenticated, scoped | |
 | `POST /api/settings/roi` | Write per-workflow ROI inputs | Authenticated | Up to 1000 entries, all-or-nothing validation |
-| `GET /api/settings` | Read instance-wide settings | Authenticated | Every `dashboard_settings` row — never a secret, see [../security](../security#secrets) |
+| `GET /api/settings` | Read instance-wide settings | Authenticated | Every `dashboard_settings` row — never a secret, see [../security](../security/README.md#secrets) |
 | `POST /api/settings` | Write an instance-wide setting | **Elevated** | Changes apply for everybody |
 | `GET /api/analytics/roi` | ROI totals | Authenticated, scoped | |
 | `GET /api/analytics/first-execution-date` | Earliest execution date in scope | Authenticated, scoped | |
@@ -125,7 +125,7 @@ user; every write is **Elevated**.
 | `POST /api/fingerprints/:fingerprint/status` | Acknowledge / resolve / ignore an error group | Authenticated | Ordinary triage, not admin-only |
 | `GET /api/fingerprints/:fingerprint/history` | Status-change history | Authenticated | |
 
-See [../operations](../operations#alerting) for the full rule-type reference
+See [../operations](../operations/README.md#alerting) for the full rule-type reference
 and a step-by-step walkthrough.
 
 ---
@@ -170,4 +170,4 @@ ahead of every authenticating router) and a private one.
 | `POST /api/integrations/openai` | Save the OpenAI key | **Elevated** | Spends an owner's billing account |
 | `POST /api/integrations/openai/clear` | Remove the stored key | **Elevated** | Falls back to `OPENAI_API_KEY` if set |
 
-See [../integrations](../integrations) for the connection walkthroughs.
+See [../integrations](../integrations/README.md) for the connection walkthroughs.

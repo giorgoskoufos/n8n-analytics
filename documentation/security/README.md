@@ -67,7 +67,7 @@ Three consequences follow directly from that:
   re-derives category and message from it; clearing it means a future
   improvement to the classifier can never correct old rows. Set
   `ERROR_STACK_RETENTION_DAYS` only once you've decided that trade is worth
-  the disk. See [../operations](../operations#retention).
+  the disk. See [../operations](../operations/README.md#retention).
 
 ---
 
@@ -192,9 +192,43 @@ not the value.
 credential (`password`, `token`, `authorization`, `apiKey`, `*_secret`, and
 several more) at any nesting depth, before a line is ever written — to either
 the console or the structured log file. See
-[../operations](../operations#logs).
+[../operations](../operations/README.md#logs).
 
 ---
+
+## What leaves your infrastructure
+
+Nothing, by default. Every outbound destination below is off until you turn it
+on, and the app has **no telemetry of any kind** — it never contacts the author
+or any analytics service, in any configuration.
+
+This table exists because "self-hosted" is a claim someone has to be able to
+check before deploying at work. These four are the complete list; they are the
+only external hosts the source contacts.
+
+| Destination | Reached when | What is sent | Turned on by |
+|---|---|---|---|
+| **OpenAI** | The assistant answers a question | The question, the conversation so far, and the results of the analyses the model chose to run | Saving an API key in Settings → Integrations. No key, no calls. |
+| **kapa.ai** (`n8n.mcp.kapa.ai`) | The assistant looks something up in the n8n documentation | The documentation question only — never your data | Connecting the docs integration, per user |
+| **Telegram** (`api.telegram.org`) | An alert fires on a Telegram channel | The alert payload: rule name, title, body, subject and the numbers behind it | Creating a Telegram alert channel |
+| **A URL you choose** | An alert fires on a webhook channel | The same alert payload | Creating a webhook alert channel |
+
+Two things worth stating plainly:
+
+- **kapa.ai is a third party, not n8n.** It is the service that powers n8n's
+  own documentation search. "Ask the n8n docs" does not mean "talk to n8n
+  GmbH", and anyone assuming otherwise would be wrong.
+- **The alert payload can contain workflow names and error text** from your
+  instance, which on some deployments is business-identifying. That is
+  inherent to an alert being useful, but it is worth knowing before you point
+  a channel at a third-party chat service.
+
+To remove the assistant's ability to write SQL while keeping the rest, set
+`AI_SQL_TOOL=off`. To have no outbound calls at all, simply configure none of
+the four.
+
+---
+
 
 ## Outbound requests: alert delivery
 
@@ -265,8 +299,9 @@ logins from anywhere.
 
 ## Reporting a concern
 
-This is a community project (see the top-level [README](../../README.md)),
-not a vendor with a security bounty program. If you find a real
-vulnerability, please open an issue with enough detail to reproduce it — or,
-for anything you'd rather not post publicly first, reach out to the
-maintainer directly before disclosing.
+**Do not open a public issue for a security problem.** Use GitHub's private
+vulnerability reporting -- the *Report a vulnerability* button under the
+repository's Security tab.
+
+[SECURITY.md](../../SECURITY.md) is the full policy: what is in scope, what is
+not, and what response time to expect from a solo-maintained project.

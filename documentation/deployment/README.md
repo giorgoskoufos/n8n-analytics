@@ -4,9 +4,9 @@
 causes almost every support question this project gets: a missing volume.*
 
 For running it well once it's up — logs, health, retention, alerting — see
-[../operations](../operations). For the single-writer ETL lock referenced
+[../operations](../operations/README.md). For the single-writer ETL lock referenced
 throughout this page, see
-[../architecture](../architecture#single-writer-election).
+[../architecture](../architecture/README.md#single-writer-election).
 
 ---
 
@@ -17,57 +17,68 @@ throughout this page, see
 - **Self-hosted n8n on PostgreSQL.** The ETL needs direct database access —
   n8n Cloud and n8n's default SQLite backend are both out of reach.
 - **Read-only Postgres credentials are enough.** This application never
-  writes to your n8n database — see [../security](../security).
+  writes to your n8n database — see [../security](../security/README.md).
 - **An OpenAI API key**, only if you want the AI assistant. It's pasted into
   Settings after your first login — no environment variable required. See
-  [../integrations](../integrations).
+  [../integrations](../integrations/README.md).
 
 > [!WARNING]
 > **Version compatibility.** The ETL reads a minimal slice of n8n's schema —
-> workflow and execution metadata, plus `execution_data` on demand. Built and
-> tested against **n8n 2.x on PostgreSQL 17**; n8n 1.x is expected to work
-> but isn't actively verified. A major n8n schema change may need a sync-job
-> update, but day-to-day analytics run off the local replica and are
-> unaffected either way.
+> workflow and execution metadata, plus `execution_data` on demand.
+
+### Verified against
+
+| n8n | PostgreSQL | Notes |
+|---|---|---|
+| **2.34.5** | 17 | The reference instance. Everything in this project was built and measured against it. |
+
+Other 2.x releases are expected to work. The ETL does not assume a fixed
+schema: it queries `information_schema.columns` for each table it reads and
+builds its statements from the columns that are actually present, so a release
+that adds or renames a column loses that one field rather than failing the
+whole cycle.
+
+**n8n 1.x is untested.** It is likely to work — the columns the ETL depends on
+predate 2.x — with one known difference: 1.x has no role column, so the
+elevated-role check
+[fails open](../security/README.md#authentication) and every user is treated as
+unrestricted. Do not run it on a shared 1.x instance where that matters.
+
+If you run a version not in the table, please open an issue saying what worked
+or broke. The list is short because one person is filling it in, not because
+anything else is known to fail.
 
 ---
 
 ## Environment
 
-Everything in `.env.example` is documented inline; the essentials:
+Six variables are required. Copy the template and fill them in:
 
-```env
-# --- Server ---
-DASHBOARD_PORT=3000
-# Minimum 32 characters — the server refuses to boot below that.
-DASHBOARD_JWT_SECRET='generate with: openssl rand -base64 48'
-
-# --- Replica location ---
-# In Docker this MUST point inside a mounted volume. Omit for local dev
-# (defaults to ./dashboard.sqlite).
-#DASHBOARD_DB_PATH=/data/dashboard.sqlite
-
-# --- n8n PostgreSQL (read-only credentials are enough) ---
-DASHBOARD_DB_USER=postgres
-DASHBOARD_DB_HOST=your_db_host
-DASHBOARD_DB_NAME=n8n_data
-DASHBOARD_DB_PASS=your_password
-DASHBOARD_DB_PORT=5432
-# or: DASHBOARD_DATABASE_URL=postgres://user:pass@host:port/n8n_data?sslmode=disable
-
-# --- Deep-links into the n8n editor ---
-N8N_EDITOR_BASE_URL=https://your-n8n-instance.com
-
-# --- ETL ---
-SYNC_INTERVAL_MINUTES=5
+```bash
+cp .env.example .env
 ```
 
-The AI assistant's key and model are deliberately **not** in this list — see
-[../integrations](../integrations#the-ai-assistants-model-and-api-key). The
-full annotated list, including every ETL/alerting/retention/logging tunable,
-is in `.env.example` at the repo root.
+| Variable | Notes |
+|---|---|
+| `DASHBOARD_JWT_SECRET` | Minimum 32 characters; the server refuses to boot below that. `openssl rand -base64 48` |
+| `DASHBOARD_DB_HOST` | Your n8n PostgreSQL. See [Connecting to a PostgreSQL that runs in Docker](#connecting-to-a-postgresql-that-runs-in-docker) if it is a container. |
+| `DASHBOARD_DB_PORT` | Usually `5432`. |
+| `DASHBOARD_DB_NAME` | |
+| `DASHBOARD_DB_USER` | Read-only credentials are enough, and are what you should use. |
+| `DASHBOARD_DB_PASS` | |
 
----
+In Docker, `DASHBOARD_DB_PATH` must point inside a mounted volume; the image
+already sets it to `/data/dashboard.sqlite`, so there is nothing to do.
+
+The AI assistant's key and model are deliberately **not** environment variables
+-- see [../integrations](../integrations/README.md#the-ai-assistants-model-and-api-key).
+
+**Around seventy further variables exist**, all optional, covering ETL batching,
+retention, alerting, fingerprinting, profiling, logging and rate limits. They
+are documented with their defaults and their reasoning in
+**[environment.md](environment.md)**, which also marks which of them are
+internal and not a supported interface.
+
 
 ## Standard installation
 
@@ -90,32 +101,66 @@ npm start              # → http://localhost:3000
 > common cause of data loss reported against this project.
 
 ```bash
-docker build -t n8n-dashboard .
+docker build -t n8n-analytics .
 docker volume create n8n_dashboard_data
-docker run -d --name n8n-dashboard -p 3000:3000 \
+docker run -d --name n8n-analytics -p 3000:3000 \
   --env-file .env \
   -v n8n_dashboard_data:/data \
-  n8n-dashboard
+  n8n-analytics
 ```
 
 ### Docker Compose
 
-```yaml
-services:
-  dashboard:
-    build: .
-    ports:
-      - "3000:3000"
-    env_file: .env
-    environment:
-      DASHBOARD_DB_PATH: /data/dashboard.sqlite
-    volumes:
-      - dashboard_data:/data
-    restart: unless-stopped
+Compose files now live at the repository root and are the recommended way to
+run this, so they are not restated here — a YAML block in prose is a file
+someone has to reassemble by hand, and it drifts from the real one.
 
-volumes:
-  dashboard_data:
+| File | Use |
+|---|---|
+| [`docker-compose.yml`](../../docker-compose.yml) | Pulls the published image. No clone needed. |
+| [`docker-compose.build.yml`](../../docker-compose.build.yml) | Builds from a checkout. For contributors and unreleased commits. |
+
+```bash
+cp .env.example .env
+docker compose up -d
 ```
+
+`docker-compose.yml` also carries the commented network block for the case
+where n8n's PostgreSQL is itself a container on this host — see
+[Connecting to a PostgreSQL that runs in Docker](#connecting-to-a-postgresql-that-runs-in-docker)
+below.
+
+### Connecting to a PostgreSQL that runs in Docker
+
+The most common failure on a first install, and it is not a configuration
+mistake so much as a container-networking one:
+
+```
+Error: connect ECONNREFUSED 127.0.0.1:5432
+```
+
+Inside a container, `127.0.0.1` is **that container**, not the host. If n8n's
+PostgreSQL is itself a container, the dashboard has to join the network it is
+already on and address it by service name.
+
+1. Find the network. `docker network ls` — for a compose-managed n8n it is
+   usually `<project>_default`, e.g. `n8n_default`.
+2. Uncomment the two `networks:` blocks in
+   [`docker-compose.yml`](../../docker-compose.yml) and replace `n8n_default`
+   with the real name.
+3. Set `DASHBOARD_DB_HOST` in `.env` to the **service name** of the Postgres
+   container (commonly `postgres` or `db`), not an IP.
+
+```bash
+docker compose exec dashboard node -e "require('net').connect(5432,'postgres').on('connect',()=>{console.log('reachable');process.exit(0)}).on('error',e=>{console.log(e.message);process.exit(1)})"
+```
+
+If PostgreSQL runs on the **host** rather than in a container, the address is
+`host.docker.internal` on Docker Desktop, or the host's IP on the bridge
+network on Linux — and PostgreSQL must be listening on it, which by default it
+is not (`listen_addresses` in `postgresql.conf`, plus a matching `pg_hba.conf`
+line).
+
 
 ### Easypanel / other PaaS
 
@@ -163,7 +208,7 @@ doesn't hold the write lock for minutes. The app fills in the rest
 automatically: a first-run sheet shows a percentage while the pages are
 still empty, then a `Catching up · 43%` line in the sidebar until it
 finishes — usually minutes, not hours. See
-[../architecture](../architecture#why-a-first-sync-takes-more-than-one-pass)
+[../architecture](../architecture/README.md#why-a-first-sync-takes-more-than-one-pass)
 for the mechanism, and don't click "Sync now" repeatedly; it's already
 running as fast as it can without saturating your n8n database.
 
@@ -190,7 +235,7 @@ EXECUTIONS_DATA_MAX_AGE=720   # hours; check n8n's docs for the unit in your ver
 
 You don't have to configure anything to be safe from corruption — the app
 elects a single ETL writer on its own; see
-[../architecture](../architecture#single-writer-election). A useful
+[../architecture](../architecture/README.md#single-writer-election). A useful
 consequence: several instances behind a load balancer for read throughput
 already works, unconfigured — one syncs, the rest serve.
 
@@ -213,9 +258,9 @@ shorten the window where a second instance briefly isn't refreshing data:
 The replica is the only copy of pruned history. Back it up on a schedule:
 
 ```bash
-docker exec n8n-dashboard \
+docker exec n8n-analytics \
   sh -c 'sqlite3 /data/dashboard.sqlite ".backup /data/backup.sqlite"' \
-  && docker cp n8n-dashboard:/data/backup.sqlite ./dashboard-$(date +%F).sqlite
+  && docker cp n8n-analytics:/data/backup.sqlite ./dashboard-$(date +%F).sqlite
 ```
 
 ### Migrating an existing replica into a volume
@@ -224,9 +269,9 @@ docker exec n8n-dashboard \
 produces a corrupt result.
 
 ```bash
-docker stop n8n-dashboard                    # or: docker service scale <svc>=0
-docker cp dashboard.sqlite n8n-dashboard:/data/dashboard.sqlite
-docker start n8n-dashboard                   # or: docker service scale <svc>=1
+docker stop n8n-analytics                    # or: docker service scale <svc>=0
+docker cp dashboard.sqlite n8n-analytics:/data/dashboard.sqlite
+docker start n8n-analytics                   # or: docker service scale <svc>=1
 ```
 
 ### Verifying a copy or a backup
@@ -264,7 +309,7 @@ node src/scripts/optimizeReplica.js --apply
 
 Chart.js, `marked`, DOMPurify, Font Awesome, and Open Sans are all vendored
 into `public/vendor/` rather than loaded from a CDN (see
-[../frontend](../frontend#vendor-assets--nothing-from-a-cdn) for why). To
+[../frontend](../frontend/README.md#vendor-assets--nothing-from-a-cdn) for why). To
 bump one:
 
 ```bash

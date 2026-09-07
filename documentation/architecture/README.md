@@ -4,9 +4,9 @@
 decisions that only make sense once you've seen a production incident they
 were written to prevent.*
 
-For the code layout and MVC conventions, see [../backend](../backend). For the
-schema itself, see [../database](../database). For the AI assistant
-specifically, see [../ai](../ai) — it has its own request lifecycle, three
+For the code layout and MVC conventions, see [../backend](../backend/README.md). For the
+schema itself, see [../database](../database/README.md). For the AI assistant
+specifically, see [../ai](../ai/README.md) — it has its own request lifecycle, three
 levels deep, and gets its own pair of documents.
 
 ---
@@ -66,7 +66,7 @@ answer — is served from the SQLite replica.
 6. **The routers** — `authRoutes`, `metricsRoutes`, `aiRoutes`,
    `integrationsRoutes` — each internally chaining `authenticateToken` →
    `resolveScope` → (sometimes) `verifyGrouping` → `requireElevatedRole` →
-   the controller. See [../api](../api) for what each endpoint actually needs.
+   the controller. See [../api](../api/README.md) for what each endpoint actually needs.
 7. **Three health probes**, deliberately three and not one (next section).
 8. **The error handler**, last in the chain — Express 5 forwards a rejected
    async handler here instead of leaving the request hanging or answering with
@@ -160,8 +160,8 @@ fixed it, both in `server.js`'s `runSyncPass()`:
 - **The alert pass** runs `ALERT_DELAY_MS` (default 30s) *after* each sync
   tick, not alongside it, so it judges data the cycle has already committed
   rather than racing it. It also refuses to run at all when the replica is
-  too stale to trust — see [../security](../security) and
-  [../operations](../operations) for what that protects against.
+  too stale to trust — see [../security](../security/README.md) and
+  [../operations](../operations/README.md) for what that protects against.
 
 ---
 
@@ -245,9 +245,9 @@ way down.
 | `src/config/instanceLock.js` | The single-writer election described above |
 | `src/config/alertEngine.js` | The alert pass |
 | `src/config/errorParser.js` | Error classification rules — pure, no I/O |
-| `src/routes/`, `src/controllers/`, `src/dao/` | See [../backend](../backend) |
-| `src/ai/` | The assistant's own pipeline — see [../ai](../ai) |
-| `public/` | The frontend — see [../frontend](../frontend) |
+| `src/routes/`, `src/controllers/`, `src/dao/` | See [../backend](../backend/README.md) |
+| `src/ai/` | The assistant's own pipeline — see [../ai](../ai/README.md) |
+| `public/` | The frontend — see [../frontend](../frontend/README.md) |
 
 For everything below the HTTP layer — the DAO convention, scope vs. grouping,
-how a new endpoint is supposed to be built — see [../backend](../backend).
+how a new endpoint is supposed to be built — see [../backend](../backend/README.md).

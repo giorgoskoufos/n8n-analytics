@@ -4,8 +4,8 @@
 quiet one, alerting reference, retention, and rate limits.*
 
 For getting it installed in the first place, see
-[../deployment](../deployment). For the schema behind everything counted
-here, see [../database](../database).
+[../deployment](../deployment/README.md). For the schema behind everything counted
+here, see [../database](../database/README.md).
 
 ---
 
@@ -50,7 +50,7 @@ and must never be the reason that volume fills up. `LOG_FILE=off` disables
 it.
 
 Each ETL pass reports its 13 stages as `[n/13]` — see
-[../architecture](../architecture#the-etl-pipeline) for the full list — so a
+[../architecture](../architecture/README.md#the-etl-pipeline) for the full list — so a
 sync in progress is distinguishable from one that finished quietly, and a
 stage with nothing to do prints nothing, which is why the numbers in a real
 log skip around.
@@ -61,7 +61,7 @@ request and everything it caused. Any field whose key looks like a
 credential (`password`, `token`, `authorization`, `apiKey`, `*_secret`, and
 several more) is replaced with `[redacted]` before anything is written, at
 any nesting depth, in **both** sinks — see
-[../security](../security#secrets).
+[../security](../security/README.md#secrets).
 
 ---
 
@@ -95,7 +95,7 @@ number.
 ## Alerting
 
 Rules and channels are configured entirely from the **Alerts** page, not in
-`.env` — see [../integrations](../integrations#alert-channels) for the
+`.env` — see [../integrations](../integrations/README.md#alert-channels) for the
 step-by-step setup. This section is the operating reference.
 
 ### The seven rule types
@@ -136,7 +136,7 @@ dropped — logged as suppressed).
 
 Targets on private or loopback addresses are refused unless
 `ALERT_ALLOW_PRIVATE_TARGETS=true`; link-local is always refused. See
-[../security](../security#outbound-requests-alert-delivery).
+[../security](../security/README.md#outbound-requests-alert-delivery).
 
 ---
 
@@ -152,7 +152,7 @@ Targets on private or loopback addresses are refused unless
 
 Stored in the replica, not in process memory — a restart, a rolling deploy,
 or a second instance never hands anyone a fresh allowance. See
-[../security](../security#rate-limits) for why the login limit is
+[../security](../security/README.md#rate-limits) for why the login limit is
 deliberately keyed on the source address as well as the account.
 
 ---
@@ -176,7 +176,7 @@ aren't the same kind of risk:
 Clearing a column frees pages for reuse — the file stops growing, it doesn't
 shrink. To actually reclaim the space, run
 `node src/scripts/optimizeReplica.js --apply` with the app stopped; see
-[../deployment](../deployment#offline-maintenance).
+[../deployment](../deployment/README.md#offline-maintenance).
 
 ---
 
@@ -184,7 +184,7 @@ shrink. To actually reclaim the space, run
 
 **"Sync says complete but the numbers still look wrong / too low."** Check
 whether the instance is still in its first catch-up window — see
-[../deployment](../deployment#first-sync). During catch-up, every total on
+[../deployment](../deployment/README.md#first-sync). During catch-up, every total on
 every page is a floor, not the final answer, and the sidebar's
 `Catching up · X%` line outranks "Synced 12s ago."
 
@@ -198,7 +198,7 @@ that session again.
 
 **"Two containers are both running and I'm worried about corruption."** You
 don't need to do anything — see
-[../architecture](../architecture#single-writer-election). Check
+[../architecture](../architecture/README.md#single-writer-election). Check
 `/api/health/deep`'s `etl.role` on each instance to confirm which one is
 actually writing.
 
@@ -206,7 +206,7 @@ actually writing.
 Confirm `SHUTDOWN_TIMEOUT_MS` (default 8s) is comfortably under your
 orchestrator's stop grace period (Docker's default is 10s) — if the grace
 period is shorter, the `SIGKILL` lands before the graceful drain finishes.
-See [../architecture](../architecture#graceful-shutdown).
+See [../architecture](../architecture/README.md#graceful-shutdown).
 
 ---
 

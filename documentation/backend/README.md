@@ -3,8 +3,8 @@
 *The Node.js/Express layer: how code is organized, the one rule the DAO layer
 exists to enforce, and how to add a new endpoint without breaking it.*
 
-For the request lifecycle and the ETL, see [../architecture](../architecture).
-For the schema these DAOs query, see [../database](../database). For the AI
+For the request lifecycle and the ETL, see [../architecture](../architecture/README.md).
+For the schema these DAOs query, see [../database](../database/README.md). For the AI
 assistant's own layer on top of this — which follows the same DAO
 convention, from the other direction — see [../ai/developers.md](../ai/developers.md).
 
@@ -37,8 +37,8 @@ src/utils/         Pure helpers shared across the above
 | `src/dao/metricsDao.js`, `insightsDao.js`, `errorIntelligenceDao.js`, `alertsDao.js`, `alertEngineDao.js`, `queueLagDao.js` | One SQL surface per domain |
 | `src/dao/settingsDao.js`, `aiConfigDao.js`, `integrationsDao.js`, `userDao.js`, `conversationsDao.js`, `syncDao.js` | Settings, secrets, external credentials, the local user mirror, chat, and the ETL's own backlog math |
 
-See [../api](../api) for what every route actually needs, and
-[../frontend](../frontend) for how a page calls into this layer.
+See [../api](../api/README.md) for what every route actually needs, and
+[../frontend](../frontend/README.md) for how a page calls into this layer.
 
 ---
 
@@ -143,7 +143,7 @@ enumerate another project's ids.
    whatever middleware chain that router already applies
    (`authenticateToken` → `resolveScope` → `verifyGrouping` as needed →
    `requireElevatedRole` if it's an owner/admin action).
-4. **Add it to [../api](../api).**
+4. **Add it to [../api](../api/README.md).**
 5. If it's something the AI assistant should be able to call too, see
    [../ai/developers.md](../ai/developers.md#adding-to-it) — a new analysis
    there is one entry, reusing the same DAO function.
@@ -158,10 +158,10 @@ returns a wrong answer that looks exactly like a right one.
 
 | File | Applies |
 |---|---|
-| `middlewares/auth.js` | `authenticateToken` (JWT check), `resolveScope` (attaches `req.scope`), `requireElevatedRole` (owner/admin gate, fails open on n8n 1.x — see [../security](../security)) |
+| `middlewares/auth.js` | `authenticateToken` (JWT check), `resolveScope` (attaches `req.scope`), `requireElevatedRole` (owner/admin gate, fails open on n8n 1.x — see [../security](../security/README.md)) |
 | `middlewares/grouping.js` | `verifyGrouping` — 400s a request whose `?workflow=`/`?folder=`/`?tag=`/`?project=` names nothing |
-| `middlewares/rateLimiter.js`, `sqliteRateStore.js` | The rate limiters listed in [../api](../api), backed by a table in the replica so a restart or a second instance never resets an attacker's allowance |
-| `middlewares/requestLog.js` | One structured line per `/api` request — see [../operations](../operations#logs) |
+| `middlewares/rateLimiter.js`, `sqliteRateStore.js` | The rate limiters listed in [../api](../api/README.md), backed by a table in the replica so a restart or a second instance never resets an attacker's allowance |
+| `middlewares/requestLog.js` | One structured line per `/api` request — see [../operations](../operations/README.md#logs) |
 
 ---
 
