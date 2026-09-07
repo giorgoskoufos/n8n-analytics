@@ -1,0 +1,32 @@
+# n8n Analytics — build from this checkout instead of pulling the published
+# image. For contributors and for running an unreleased commit.
+#
+#   docker compose -f docker-compose.build.yml up -d --build
+#
+# Everything else — the volume, the health check, the Docker networking note —
+# is identical to docker-compose.yml. Read that file first.
+
+services:
+  dashboard:
+    build:
+      context: .
+      args:
+        # Stamped onto the image labels only. `dev` is honest: a local build is
+        # not a release, and calling it one makes a bug report unreadable.
+        APP_VERSION: dev
+    container_name: n8n-analytics
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - dashboard_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  dashboard_data:

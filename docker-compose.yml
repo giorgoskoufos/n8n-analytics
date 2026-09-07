@@ -1,0 +1,53 @@
+# n8n Analytics — the file you run.
+#
+#   cp .env.example .env    # fill in DASHBOARD_JWT_SECRET and the DB settings
+#   docker compose up -d
+#
+# Building from source is not required. If you want to (to hack on it, or to
+# run an unreleased commit), use the companion file instead:
+#
+#   docker compose -f docker-compose.build.yml up -d --build
+
+services:
+  dashboard:
+    image: ghcr.io/giorgoskoufos/n8n-analytics:latest
+    container_name: n8n-analytics
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      # REQUIRED. The replica holds execution history that n8n has already
+      # pruned from Postgres and CANNOT be rebuilt from anywhere. Without this
+      # volume, every redeploy silently destroys the archive.
+      #
+      # DASHBOARD_DB_PATH already points at /data inside the image, so there is
+      # nothing to set in .env for this to work.
+      - dashboard_data:/data
+    healthcheck:
+      # Mirrors the HEALTHCHECK in the image. Declared here too so that a
+      # `docker compose ps` reports health even when someone pins an older tag.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    # ---------------------------------------------------------------------
+    # IF YOUR n8n POSTGRES RUNS IN DOCKER ON THIS HOST, READ THIS.
+    #
+    # 127.0.0.1 inside this container is this container, not your host, so
+    # DASHBOARD_DB_HOST=127.0.0.1 gives you ECONNREFUSED. Join the network
+    # Postgres is already on and address it by service name: uncomment the
+    # two blocks below, replace n8n_default with the real network name
+    # (`docker network ls`), and set DASHBOARD_DB_HOST=postgres in .env to
+    # whatever that service is called.
+    # ---------------------------------------------------------------------
+    # networks: [n8n_default]
+
+volumes:
+  dashboard_data:
+
+# networks:
+#   n8n_default:
+#     external: true

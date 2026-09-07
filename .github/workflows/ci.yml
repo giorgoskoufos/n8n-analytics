@@ -1,0 +1,78 @@
+name: CI
+
+# Lint, tests and the vendored-asset drift check. Nothing here deploys or
+# publishes anything — that lives in release.yml, on a tag.
+#
+# This workflow was previously the tail end of deploy.yml, which ended by
+# curling a personal Easypanel webhook. In a public repository that fails on
+# every fork (secrets are not available to forks), advertises the maintainer's
+# deploy topology, and puts a red X on a first contributor's PR that has
+# nothing to do with them. Deployment now happens from the private remote.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Dockerfile and package.json engines. Testing on a
+          # different major from the one that runs in production is how a
+          # runtime difference reaches users.
+          node-version: '22'
+          cache: npm
+
+      # ci, not install: the lockfile is the point of the exercise.
+      - run: npm ci
+
+      - run: npm run lint
+
+      # The integration suite boots the real server against a temporary SQLite
+      # file. It needs no Postgres and no n8n instance — that is deliberate, so
+      # this job can run anywhere, including a contributor's fork.
+      - run: npm test
+
+      # The committed vendor bundle is what the container serves; the Dockerfile
+      # installs dependencies before copying the source, so nothing regenerates
+      # it at build time. If it has drifted from package.json, the deployed
+      # frontend is not the one described by the lockfile.
+      - name: public/vendor is in sync with package.json
+        run: |
+          node src/scripts/vendorAssets.js
+          if ! git diff --quiet -- public/vendor; then
+            echo "::error::public/vendor is stale. Run 'node src/scripts/vendorAssets.js' and commit the result."
+            git diff --stat -- public/vendor
+            exit 1
+          fi
+
+      # Same argument for the stylesheet. Tailwind output is committed, so a
+      # change to input.css that was never built ships the old CSS with new
+      # markup — which looks like a broken upgrade rather than a missed step.
+      - name: public/css/styles.css is in sync with input.css
+        run: |
+          npm run build:css
+          if ! git diff --quiet -- public/css/styles.css; then
+            echo "::error::styles.css is stale. Run 'npm run build:css' and commit the result."
+            exit 1
+          fi
+
+  # The compose files are the documented way to run this. A syntax error in one
+  # of them is invisible until a stranger tries to start the app.
+  compose:
+    name: Compose files parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.build.yml config --quiet
