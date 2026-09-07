@@ -1,0 +1,8 @@
+# Forces every issue through one of the forms above, so a bug report can't
+# skip the fields that make it debuggable, and routes plain questions to
+# Discussions so the issue tracker stays a tracker.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/giorgoskoufos/n8n-analytics/discussions
+    about: For "how do I..." or "does this support..." — not for bugs or feature requests.

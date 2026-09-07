@@ -1,0 +1,115 @@
+name: Bug report
+description: Something is broken, wrong, or not working the way the docs say.
+labels: ["bug", "needs-info"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The five fields below are the ones almost
+        every report ends up needing — filling them in up front saves a
+        round-trip.
+
+  - type: input
+    id: dashboard-version
+    attributes:
+      label: Dashboard version
+      description: >
+        `GET /api/version`, or Settings → Health. Not the git branch or "latest" —
+        the actual version string.
+      placeholder: "2.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: n8n-version
+    attributes:
+      label: n8n version
+      description: >
+        The ETL reads n8n's schema directly, so this is the first thing that
+        matters. Verified against 2.34.5; other 2.x is expected to work and 1.x
+        is untested, so an unusual version here is useful information, not a
+        problem.
+      placeholder: "2.34.5"
+    validations:
+      required: true
+
+  - type: input
+    id: postgres-version
+    attributes:
+      label: PostgreSQL version
+      description: Verified against PostgreSQL 17. Older versions may surface issues here first.
+      placeholder: "17"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy-method
+    attributes:
+      label: Deploy method
+      options:
+        - Docker Compose (docker-compose.yml, published image)
+        - Docker Compose, built from source (docker-compose.build.yml)
+        - Docker (docker run)
+        - Bare Node (npm start)
+        - Other / PaaS (Easypanel, etc.)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Architecture
+      description: Only if you're on Docker. Native dependencies (sqlite3, bcrypt) make this matter.
+      options:
+        - amd64 / x86_64
+        - arm64 (Raspberry Pi, ARM VPS, Apple Silicon via Docker Desktop)
+        - Not applicable (bare Node)
+        - Not sure
+    validations:
+      required: false
+
+  - type: dropdown
+    id: first-sync
+    attributes:
+      label: Has the first sync completed?
+      description: >
+        A very common report is "the dashboard shows no data" during an
+        instance's first sync, which can take a while on a large n8n install.
+        Check Settings → Health before assuming something is broken.
+      options:
+        - "Yes — data has appeared and this is about something else"
+        - "No — still on the first sync"
+        - "Not sure how to tell"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what actually happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: >
+        Structured JSON logs live at `/data/logs/app.jsonl` inside the container
+        (or wherever `LOG_FILE` points). **Please redact anything from your own
+        n8n data** — workflow names, error payloads, credentials, hostnames you'd
+        rather not share.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked Settings → Health and the sync pipeline is running (or I've said above that it isn't)
+          required: false
+        - label: I searched existing issues and didn't find this one
+          required: true

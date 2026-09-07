@@ -1,0 +1,19 @@
+name: Feature request
+description: Something the dashboard doesn't do yet.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to find out or do that the dashboard can't currently answer?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: A rough shape is fine — this doesn't need to be a spec.
+    validations:
+      required: false
