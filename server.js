@@ -1,5 +1,5 @@
 // ==========================================
-// n8n Analytics Dashboard - Backend Server
+// n8n Analytics - Backend Server
 // ==========================================
 
 require('dotenv').config();
@@ -17,6 +17,7 @@ const metricsRoutes = require('./src/routes/metricsRoutes');
 const aiRoutes = require('./src/routes/aiRoutes');
 const { router: integrationsRoutes, publicRouter: integrationsPublicRoutes } =
     require('./src/routes/integrationsRoutes');
+const version = require('./src/utils/version');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -85,6 +86,23 @@ app.use('/api', requestLog);
 // A browser returning from an authorisation screen has no token to present; see
 // the note in integrationsRoutes.
 app.use('/api', integrationsPublicRoutes);
+
+// What is running (B-7). Unauthenticated on purpose: the first thing anyone
+// filing a bug needs is the version, and making them log in to find it means
+// the report arrives without it. It leaks nothing — the version is inferable
+// from the served HTML and the published image tag, and the commit is a public
+// SHA.
+//
+// Declared HERE, above the routers, for the same reason the OAuth callback is:
+// every router below calls router.use(authenticateToken) with no path, so the
+// first of them answers 401 for any /api request before a later declaration
+// can be reached. Mounting this after them looks correct and returns 401.
+//
+// The limiter is required inline rather than with the health probes below
+// because this route has to be declared before them; it is the same instance,
+// require caches.
+app.get('/api/version', require('./src/middlewares/rateLimiter').healthLimiter,
+    (req, res) => res.json(version.info));
 
 // Main Routes
 app.use('/api', authRoutes);
@@ -390,7 +408,7 @@ const server = http.createServer(app);
 
 localDb.ready.then(() => {
     server.listen(port, () => {
-        log.info(`🚀 n8n Analytics Dashboard modularized and listening at http://localhost:${port}`);
+        log.info(`🚀 n8n Analytics ${version.banner()} listening at http://localhost:${port}`);
         log.info(`📡 Press Ctrl+C to stop the server`);
         // Said once, because a first-time deploy is exactly when somebody wants
         // to know this without reading the .env.example comment first — the

@@ -14,7 +14,7 @@
 const localDb = require('../config/localDb');
 const alertEngine = require('../config/alertEngine');
 const {
-    validateRule, validateChannel, redactConfig, readHeaders, SECRET_MASK
+    ALERT_SOURCE, validateRule, validateChannel, redactConfig, readHeaders, SECRET_MASK
 } = require('../utils/alertValidation');
 const { toCurl } = require('../utils/curl');
 const { daoError } = require('./shared');
@@ -170,7 +170,7 @@ async function exportChannelCurl({ id, body }) {
         headers,
         method: 'POST',
         body: {
-            source: 'n8n-analytics-dashboard',
+            source: ALERT_SOURCE,
             rule: 'Example rule',
             title: 'Example alert',
             body: 'This is the shape of what this channel receives.',

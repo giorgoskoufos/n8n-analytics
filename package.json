@@ -1,6 +1,6 @@
 {
-  "name": "n8n-metrics-dashboard",
-  "version": "1.0.0",
+  "name": "n8n-analytics",
+  "version": "2.0.0",
   "description": "Real-time analytics dashboard for self-hosted n8n",
   "author": "Giorgos Koufos",
   "license": "MIT",

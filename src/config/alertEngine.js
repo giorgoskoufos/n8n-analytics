@@ -1,6 +1,6 @@
 const localDb = require('./localDb');
 const dao = require('../dao/alertEngineDao');
-const { RULE_TYPES, readHeaders } = require('../utils/alertValidation');
+const { ALERT_SOURCE, RULE_TYPES, readHeaders } = require('../utils/alertValidation');
 const { groupingClause } = require('../utils/grouping');
 const log = require('../utils/logger').logger('ALERT');
 
@@ -314,7 +314,7 @@ async function deliver(channel, event) {
             method: 'POST',
             headers,
             body: JSON.stringify({
-                source: 'n8n-analytics-dashboard',
+                source: ALERT_SOURCE,
                 rule: event.rule_name,
                 title: event.title,
                 body: event.body,

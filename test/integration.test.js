@@ -328,6 +328,21 @@ test('liveness is open, readiness reports the missing Postgres', async () => {
     assert.equal((await api('/readyz')).status, 503);
 });
 
+// B-7. The unauthenticated part is the whole point and it is easy to lose:
+// every router under /api calls router.use(authenticateToken) with no path, so
+// this route only stays open while it is declared ABOVE them in server.js.
+// Moving it down looks harmless and turns it into a 401 — which defeats the
+// reason it exists, since the person who most needs the version is the one who
+// cannot log in.
+test('the version endpoint answers without a token, from package.json', async () => {
+    const res = await api('/api/version');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.version, require('../package.json').version);
+    assert.equal(res.body.node, process.version);
+    // Reported even when nothing stamped it, so the field is never absent.
+    assert.ok(typeof res.body.commit === 'string' && res.body.commit.length > 0);
+});
+
 // ------------------------------------------------------------------- auth
 test('every API route refuses an anonymous caller', async () => {
     const routes = [
@@ -903,7 +918,7 @@ test('an alert fires once, is delivered, and the cooldown holds the rest', async
     const got = sinkReceived[0];
     assert.equal(got.method, 'POST');
     assert.equal(got.headers['x-token'], 's3cret', 'the configured header must be sent');
-    assert.equal(got.body.source, 'n8n-analytics-dashboard');
+    assert.equal(got.body.source, 'n8n-analytics');
     assert.equal(got.body.rule, 'anything failing');
     assert.ok(got.body.title.includes('%'), 'the alert should say how bad it is');
     assert.ok(got.body.data && typeof got.body.data.rate === 'number',

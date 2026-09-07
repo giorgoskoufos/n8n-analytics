@@ -51,4 +51,27 @@ USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.DASHBOARD_PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# --- Provenance (B-7) -------------------------------------------------------
+#
+# Last, and deliberately so. These change on every release while nothing above
+# them does, and an ARG placed higher would invalidate the npm ci layer for a
+# rebuild that differs only by tag.
+#
+# Only GIT_SHA becomes an ENV, because only GIT_SHA is genuinely unknowable
+# from the source tree — src/utils/version.js reads it at boot. APP_VERSION is
+# NOT exported: package.json is the single source of the version number, and a
+# second one in the environment is how an image ends up labelled 2.1.0 while
+# its own /api/version answers 2.0.0. The release workflow asserts the tag and
+# package.json agree before it ever gets here.
+ARG APP_VERSION=dev
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
+LABEL org.opencontainers.image.title="n8n Analytics" \
+      org.opencontainers.image.description="Analytics dashboard for self-hosted n8n" \
+      org.opencontainers.image.version=${APP_VERSION} \
+      org.opencontainers.image.revision=${GIT_SHA} \
+      org.opencontainers.image.source=https://github.com/giorgoskoufos/n8n-analytics \
+      org.opencontainers.image.licenses=MIT
+
 CMD ["node", "server.js"]

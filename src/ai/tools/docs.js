@@ -216,7 +216,7 @@ async function connect(userId) {
     await rpc('initialize', {
         protocolVersion: '2025-06-18',
         capabilities: {},
-        clientInfo: { name: 'n8n-dashboard', version: '1.0' }
+        clientInfo: { name: 'n8n-analytics', version: '1.0' }
     }, userId);
 
     if (tool) return tool;

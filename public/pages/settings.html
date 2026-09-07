@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-    <title>Settings | n8n Analytics</title>
+    <title>Settings · n8n Analytics</title>
     <script src="../logic/guard.js"></script>
     <link rel="stylesheet" href="/vendor/open-sans/open-sans.css">
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
@@ -333,6 +333,18 @@
                     </div>
                     <button id="healthRefresh" class="btn btn-sm shrink-0">
                         <i class="fa-solid fa-rotate"></i> Refresh
+                    </button>
+                </div>
+                <!-- Rendered from /api/version, not from the system endpoint below.
+                     The version is most needed exactly when the heavy health
+                     query is the thing that is broken, so it must not share a
+                     fate with it. -->
+                <div class="flex items-center gap-2 mb-4 pb-4 border-b border-line/60">
+                    <span class="text-[10px] uppercase font-bold tracking-widest text-ink-3">Version</span>
+                    <span id="versionText" class="text-xs text-ink-1 font-mono">&mdash;</span>
+                    <button id="versionCopy" class="btn btn-sm shrink-0" type="button"
+                            title="Copy for a bug report">
+                        <i id="versionCopyIcon" class="fa-regular fa-copy"></i>
                     </button>
                 </div>
                 <div id="healthBody" style="position:relative;min-height:160px"></div>

@@ -115,7 +115,7 @@ async function main() {
 
     const client = await oauth.register(meta, {
         redirectUri: REDIRECT,
-        clientName: 'n8n Analytics Dashboard (CLI)'
+        clientName: 'n8n Analytics (CLI)'
     });
     console.log(`  client registered    : ${client.client_id}`);
 

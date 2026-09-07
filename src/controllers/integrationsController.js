@@ -87,7 +87,7 @@ exports.connect = async (req, res) => {
         // step with a redirect URI that is derived from the request.
         const client = await oauth.register(meta, {
             redirectUri,
-            clientName: 'n8n Analytics Dashboard'
+            clientName: 'n8n Analytics'
         });
 
         const { url, verifier, state } = oauth.authorizeUrl(meta, {

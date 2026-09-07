@@ -9,6 +9,17 @@
  */
 
 /**
+ * The `source` field on every outgoing alert payload.
+ *
+ * This is a public interface, not a label: people build n8n workflows that
+ * filter incoming webhooks on it, so changing it breaks their filters and is a
+ * MAJOR bump. It lives here, once, rather than as a literal in the engine and
+ * again in the curl example — two copies of an interface is one copy that
+ * eventually disagrees.
+ */
+const ALERT_SOURCE = 'n8n-analytics';
+
+/**
  * Every rule type, with what its threshold means and what it is measured on.
  *
  * `unit` and `hint` are shipped to the front end verbatim. A threshold field
@@ -508,6 +519,7 @@ function redactConfig(type, config) {
 }
 
 module.exports = {
+    ALERT_SOURCE,
     RULE_TYPES,
     CHANNEL_TYPES,
     validateRule,

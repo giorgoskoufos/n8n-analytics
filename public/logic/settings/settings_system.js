@@ -222,4 +222,53 @@
 
     const refresh = document.getElementById('healthRefresh');
     if (refresh) refresh.addEventListener('click', load);
+
+    // --- Version (B-7) -----------------------------------------------------
+    //
+    // Loaded eagerly and separately from everything above. /api/version is a
+    // frozen object with no I/O behind it, so it costs nothing, and it is
+    // deliberately not tied to the `settings:section` listener: the moment a
+    // user most needs to read their version off this page is the moment the
+    // system endpoint is failing.
+    //
+    // Copy-pasteable by design. A version nobody can select is a version that
+    // does not reach the bug report.
+    async function loadVersion() {
+        const el = document.getElementById('versionText');
+        const btn = document.getElementById('versionCopy');
+        if (!el) return;
+
+        let text;
+        try {
+            const res = await window.fetchWithAuth('/api/version');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const v = await res.json();
+            text = `n8n Analytics v${v.version} (commit ${v.commit}, node ${v.node})`;
+            el.textContent = text;
+        } catch {
+            el.textContent = 'unavailable';
+            if (btn) btn.hidden = true;
+            return;
+        }
+
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            const icon = document.getElementById('versionCopyIcon');
+            try {
+                await navigator.clipboard.writeText(text);
+                if (icon) {
+                    icon.className = 'fa-solid fa-check';
+                    icon.style.color = 'var(--good-ink)';
+                    setTimeout(() => {
+                        icon.className = 'fa-regular fa-copy';
+                        icon.style.color = '';
+                    }, 2000);
+                }
+            } catch (err) {
+                console.warn('[SETTINGS] clipboard refused:', err);
+            }
+        });
+    }
+
+    loadVersion();
 })();
