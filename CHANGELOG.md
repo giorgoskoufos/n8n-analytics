@@ -15,7 +15,7 @@ For a self-hosted app the version contract is about **upgrade safety**:
 
 ## [Unreleased]
 
-## [2.0.0] — unreleased
+## [2.0.0] — 2026-09-09
 
 ### Added
 
