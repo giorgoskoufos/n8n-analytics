@@ -107,6 +107,13 @@ stopped running.
 >
 > Running more than one instance is *not* something to avoid — the app elects a single ETL writer on its own. See [documentation/deployment](documentation/deployment/README.md#running-more-than-one-instance).
 
+> [!TIP]
+> **amd64 and arm64.** The published image covers both, so a Raspberry Pi, an
+> Ampere VPS or a Hetzner CAX box pulls the same tag as an x86 server. Each
+> architecture is built on its own native runner and then started and asked for
+> its version before the tag is published — the arm64 image is tested, not
+> merely compiled.
+
 > [!WARNING]
 > **Verified on n8n 2.34.5 / PostgreSQL 17.** Other 2.x releases are expected to work — the ETL probes the schema and builds its queries from the columns that actually exist, rather than assuming a fixed shape. n8n 1.x is untested. A major n8n schema change may need a sync-job update; day-to-day analytics run off the local replica and are unaffected either way.
 >

@@ -79,5 +79,7 @@ For a self-hosted app the version contract is about **upgrade safety**:
 
 ## [1.0.0] — 2026-08-22
 
-The public v1, as published to `n8n-metrics-dashboard`. Tagged retroactively at
-`346bc2c`, the last commit before v2 work began.
+The public v1, as published to `n8n-metrics-dashboard`. It ends at `346bc2c`,
+the last commit before v2 work began — recorded here rather than as a tag,
+because this repository's release pipeline builds and publishes an image for
+every `v*` tag pushed, and the v1 tree predates everything that pipeline checks.
