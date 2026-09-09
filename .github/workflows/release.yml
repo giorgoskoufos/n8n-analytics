@@ -115,9 +115,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # --generate-notes for now. Once CHANGELOG.md exists (deploy-plan item 04)
-      # this should extract that version's section instead, so the release notes
-      # and the changelog cannot drift apart.
-      - run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+
+      # Release notes come from CHANGELOG.md, so they cannot drift from it.
+      # A version with no section falls back to generated notes rather than
+      # failing the release — the tag is already pushed and the image is
+      # already published by this point, so refusing here would leave a
+      # half-finished release behind.
+      - name: Extract the changelog section
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # index() rather than a regex: the heading contains [ and ], and
+          # getting those escaped correctly through YAML, the shell and awk is
+          # three chances to silently match nothing and ship empty notes.
+          awk -v hdr="## [$version]" '
+            index($0, hdr) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/notes.md
+          if grep -q '[^[:space:]]' /tmp/notes.md; then
+            echo "have_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No CHANGELOG section for $version; using generated notes."
+            echo "have_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+      - name: Create the release
+        run: |
+          args=(--title "$GITHUB_REF_NAME")
+          case "$GITHUB_REF_NAME" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          if [ "${{ steps.notes.outputs.have_notes }}" = "true" ]; then
+            args+=(--notes-file /tmp/notes.md)
+          else
+            args+=(--generate-notes)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${args[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
