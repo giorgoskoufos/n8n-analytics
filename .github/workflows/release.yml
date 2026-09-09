@@ -221,22 +221,52 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
+      - name: The tag resolves to this architecture
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          docker pull -q "$IMAGE:$tag"
+          # The point of the manifest list is that one tag serves both
+          # architectures. If the index were wrong, the arm64 runner would
+          # silently pull the amd64 image and the version check below would
+          # still pass — so check what Docker actually resolved to.
+          got="$(docker image inspect --format '{{.Architecture}}' "$IMAGE:$tag")"
+          if [ "$got" != "${{ matrix.arch }}" ]; then
+            echo "::error::$IMAGE:$tag resolved to $got on a ${{ matrix.arch }} runner."
+            exit 1
+          fi
+          echo "$IMAGE:$tag resolved to $got, as expected."
+
       - name: Run it and ask for its version
         run: |
+          tag="${GITHUB_REF_NAME#v}"
+          # /api/version reports package.json, which never carries the
+          # prerelease suffix: v2.0.0-rc2 is a candidate for 2.0.0 and the image
+          # correctly says 2.0.0. The `verify` job has already asserted the tag
+          # and package.json agree, so compare against the same base it used.
+          want="${tag%%-*}"
           docker run -d --name smoke -p 3000:3000 \
             -e DASHBOARD_JWT_SECRET=ci-smoke-test-secret-not-a-real-one \
-            "$IMAGE:${GITHUB_REF_NAME#v}"
+            "$IMAGE:$tag"
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/api/version >/tmp/v.json 2>/dev/null; then break; fi
             sleep 2
           done
           cat /tmp/v.json
+          echo
           got="$(jq -r .version /tmp/v.json)"
-          if [ "$got" != "${GITHUB_REF_NAME#v}" ]; then
-            echo "::error::Image reports version $got, expected ${GITHUB_REF_NAME#v}."
+          if [ "$got" != "$want" ]; then
+            echo "::error::Image reports version $got, expected $want."
             docker logs smoke
             exit 1
           fi
+          # The commit is what turns a bug report into a diff. An image that
+          # cannot say which commit built it is not much better than untagged.
+          sha="$(jq -r .commit /tmp/v.json)"
+          if [ "$sha" != "${GITHUB_SHA:0:7}" ]; then
+            echo "::error::Image reports commit $sha, expected ${GITHUB_SHA:0:7}."
+            exit 1
+          fi
+          echo "Reports $got at commit $sha on ${{ matrix.arch }}."
 
   release:
     name: GitHub Release
