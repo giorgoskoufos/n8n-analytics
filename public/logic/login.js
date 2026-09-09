@@ -71,7 +71,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 3. Interactive Dotted Canvas & Logo Glow Logic
-    const authCard = document.getElementById('authCard');
     const logoBadge = document.getElementById('logoBadge');
     const logoGlow = document.getElementById('logoGlow');
 
