@@ -741,6 +741,37 @@ test('a mode filter narrows every view that accepts one, drill-down included', a
     }
 });
 
+test('the volume chart is populated before the ETL has ever cached a series', async () => {
+    // execution_volume_stats is written only by the sync job's volume stage, so
+    // it is empty on a fresh install and again after a replica rebuild — which
+    // is precisely when someone is deciding whether this thing works. It used to
+    // return [] there, and the panel rendered blank with no explanation.
+    //
+    // This suite never runs the ETL, so the table is empty for the whole file:
+    // the endpoint below can only pass by computing the series live.
+    const cached = await new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(DB, sqlite3.OPEN_READONLY);
+        db.all('SELECT COUNT(*) AS n FROM execution_volume_stats', (e, r) => {
+            db.close();
+            return e ? reject(e) : resolve(r[0].n);
+        });
+    });
+    assert.equal(cached, 0, 'precondition: nothing cached, or this tests the wrong path');
+
+    const res = await api('/api/analytics/execution-volume', { token: OWNER });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.length, 288, 'a full rolling 24 hours of five-minute buckets');
+
+    const step = new Date(res.body[1].timestamp) - new Date(res.body[0].timestamp);
+    assert.equal(step, 5 * 60 * 1000, 'buckets are five minutes apart');
+
+    // Zero-filled, not sparse: a gap in traffic must read as a zero rather than
+    // as a missing point, or the chart draws a line straight across it.
+    assert.ok(res.body.every((b) => Number.isInteger(b.started_count)));
+    assert.ok(res.body.some((b) => b.started_count > 0),
+        'the fixture executions are recent, so some bucket must be non-zero');
+});
+
 test('the credential mirror has no column that could hold a secret', async () => {
     // The single most important assertion in this file. credentials_entity.data
     // is the encrypted credential blob; the dashboard has no use for it and a

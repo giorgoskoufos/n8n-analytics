@@ -648,7 +648,17 @@ async function getExecutionVolume({ scope: caller, grouping, filters = {} }) {
             ORDER BY timestamp ASC
             LIMIT 1000
         `);
-        return (result.rows);
+        if (result.rows.length) return (result.rows);
+
+        // Nothing cached yet. Only the ETL writes that table, so it is empty on
+        // every install until the first sync reaches its volume stage, and again
+        // after a replica is rebuilt. Returning [] there renders a blank panel
+        // with no explanation, at exactly the moment a new user is deciding
+        // whether the thing works — so compute the same 288 buckets live from
+        // executions that are already synced. Once the stage runs, the cached
+        // path takes over and this never fires again.
+        const newest = Math.floor(Date.now() / STEP_MS) * STEP_MS;
+        return (await volumeSeries(scope, newest - 287 * STEP_MS, 288, mode.mode));
     }
 
     // A specific day: the same 288 buckets, anchored at the requested start.

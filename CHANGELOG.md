@@ -51,6 +51,13 @@ For a self-hosted app the version contract is about **upgrade safety**:
 - The GitHub repository was renamed from `n8n-metrics-dashboard`. GitHub keeps a
   permanent redirect, so existing clones, forks and links continue to work.
 
+### Fixed
+
+- The execution-volume chart is populated before the first sync finishes. Its
+  series is cached by the ETL, so on a fresh install — or after a replica
+  rebuild — there was nothing to read and the panel rendered blank with no
+  explanation. It now computes the same buckets live until the cache exists.
+
 ### Security
 
 - The assistant runs against a read-only SQLite connection over purpose-built
