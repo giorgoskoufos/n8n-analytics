@@ -13,9 +13,83 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const ROOT = path.join(__dirname, '..');
+
+/**
+ * A throwaway replica, pointed at BEFORE any app module is required.
+ *
+ * Without this, `DASHBOARD_DB_PATH` is unset, localDb and readonlyDb fall back
+ * to ./dashboard.sqlite, and these tests run against whatever replica happens
+ * to be sitting in the working copy. On a maintainer's machine that is the real
+ * one — 200 MB of production history — so four tests passed here by reading
+ * live customer data and failed in CI, where the file does not exist. One of
+ * them asserted on a folder name that only exists on that one instance.
+ *
+ * Set before the first require on purpose: both modules resolve the path once,
+ * at load time, and localDb is required at module scope further down this file.
+ */
+const os = require('node:os');
+const TMP_DB = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'n8n-unit-')), 'unit.sqlite'
+);
+process.env.DASHBOARD_DB_PATH = TMP_DB;
+
 const { parseIsoDate, parseDateRange, parseExecutionMode, validateSetting, validateApiKey,
     validateRoiEntry } =
     require(path.join(ROOT, 'src/utils/validate'));
+
+/**
+ * The few rows the AI tests need to be about anything.
+ *
+ * Deliberately small and deliberately fictional. The point is not to simulate
+ * an instance — it is that a test asserting "the catalogue finds this" should
+ * carry the thing it expects to find, rather than hoping the machine it runs on
+ * happens to have one.
+ */
+test.before(async () => {
+    const localDb = require(path.join(ROOT, 'src/config/localDb'));
+    await localDb.ready;
+
+    await localDb.executeMany(
+        'INSERT OR IGNORE INTO workflow_entity (id, name, active, "isArchived", "parentFolderId") VALUES (?,?,?,?,?)',
+        [
+            ['wf-fixture-a', 'Call Center - Ticket Router', 1, 0, 'fld-fixture'],
+            ['wf-fixture-b', 'Invoice Sync', 1, 0, 'fld-fixture'],
+            ['wf-fixture-c', 'Nightly Cleanup', 0, 1, null],
+            // A deliberate duplicate. The "refuse an ambiguous name" test used
+            // to skip itself whenever the replica had no two workflows sharing
+            // a name, which meant it only ever ran on an instance that happened
+            // to have one. Now it runs everywhere.
+            ['wf-fixture-d', 'Invoice Sync', 1, 0, null]
+        ]
+    );
+    await localDb.execute(
+        'INSERT OR IGNORE INTO folder (id, name) VALUES (?,?)', ['fld-fixture', 'Call Center']
+    );
+
+    const now = Date.now();
+    await localDb.executeMany(
+        `INSERT OR IGNORE INTO execution_entity
+            (id, "workflowId", status, "startedAt", "stoppedAt", mode, "createdAt", finished)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        Array.from({ length: 12 }, (_, i) => {
+            const started = new Date(now - i * 3600000);
+            const failed = i % 4 === 0;
+            return [9000 + i, i % 2 ? 'wf-fixture-a' : 'wf-fixture-b',
+                failed ? 'error' : 'success',
+                started.toISOString(), new Date(started.getTime() + 1500).toISOString(),
+                i % 3 ? 'webhook' : 'trigger',
+                new Date(started.getTime() - 200).toISOString(), failed ? 0 : 1];
+        })
+    );
+    await localDb.executeMany(
+        `INSERT OR IGNORE INTO execution_error_analytics
+            (id, workflow_id, node_name, node_type, error_type, error_message, error_category, timestamp)
+         VALUES (?,?,?,?,?,?,?,?)`,
+        [0, 4, 8].map((i) => [9000 + i, 'wf-fixture-a', 'HTTP Request',
+            'n8n-nodes-base.httpRequest', 'NetworkError', 'connect ETIMEDOUT 10.0.0.1:443',
+            'timeout', new Date(now - i * 3600000).toISOString()])
+    );
+});
 
 // ---------------------------------------------------------------- parseIsoDate
 test('parseIsoDate accepts a real ISO timestamp', () => {

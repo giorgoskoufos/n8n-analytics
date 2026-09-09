@@ -1167,11 +1167,14 @@ test('the AI assistant no longer refuses a scoped user outright', async () => {
     // reads (see the view-scoping test in unit.test.js), so a member can be
     // answered within their own scope.
     //
-    // 500 is still acceptable, because whether OpenAI is reachable is a property
-    // of the environment rather than of this behaviour. 403 is not.
+    // 500 and 503 are both acceptable, because whether OpenAI is configured and
+    // reachable is a property of the environment rather than of this behaviour:
+    // 503 is what the controller answers when no API key is set, which is the
+    // normal state in CI and in any checkout without a key. 403 is not
+    // acceptable — that would be the refusal this test exists to catch.
     const r = await api('/api/ai-chat', { token: MEMBER, method: 'POST', body: { message: 'hello' } });
     assert.notEqual(r.status, 403, 'a project member must not be refused outright any more');
-    assert.ok([200, 500].includes(r.status), `unexpected ${r.status}`);
+    assert.ok([200, 500, 503].includes(r.status), `unexpected ${r.status}`);
 });
 
 // -------------------------------------------------------------------- logging
