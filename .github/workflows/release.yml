@@ -33,13 +33,22 @@ jobs:
       - name: Compare
         run: |
           tag="${GITHUB_REF_NAME#v}"
+          # A prerelease is a candidate FOR a version, not a different one:
+          # v2.0.0-rc1 is tested against package.json 2.0.0, because bumping
+          # package.json to 2.0.0-rc1 would make /api/version report a version
+          # that never ships, and would need a second bump before release.
+          base="${tag%%-*}"
           pkg="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
+          if [ "$base" != "$pkg" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $pkg."
             echo "Bump package.json, commit, then re-tag. Never move a published tag."
             exit 1
           fi
-          echo "$GITHUB_REF_NAME matches package.json ($pkg)."
+          if [ "$base" != "$tag" ]; then
+            echo "$GITHUB_REF_NAME is a prerelease of $pkg — matches."
+          else
+            echo "$GITHUB_REF_NAME matches package.json ($pkg)."
+          fi
 
   image:
     name: Build and publish image
